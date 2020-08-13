@@ -1,6 +1,7 @@
 # `gg-scm.io/pkg/git`
 
 [![Reference](https://pkg.go.dev/badge/gg-scm.io/pkg/git?tab=doc)](https://pkg.go.dev/gg-scm.io/pkg/git?tab=doc)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg)](CODE_OF_CONDUCT.md)
 
 `gg-scm.io/pkg/git` provides a high-level interface for interacting with a
 [Git][] subprocess in Go. It was developed for [gg][], but this library is
