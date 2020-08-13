@@ -1,0 +1,85 @@
+# Copyright 2019 The gg Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Build
+on: push
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-18.04
+    strategy:
+      matrix:
+        git:
+        - "2.27.0"  # latest
+        - "2.25.1"  # Ubuntu LTS focal
+        - "2.20.1"  # Debian buster
+    steps:
+    - name: Install Git dependencies
+      run: |
+        sudo apt-get update &&
+        sudo apt-get install -y --no-install-recommends \
+          gettext \
+          libcurl4-gnutls-dev \
+          libexpat1-dev \
+          libssl-dev \
+          libz-dev \
+          xz-utils
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+    - name: Check out code
+      uses: actions/checkout@v1
+    - name: Install Git
+      run: misc/build-git.bash ~/git ${{ matrix.git }}
+    - name: Download dependencies
+      run: go mod download
+      env:
+        GO111MODULE: on
+    - name: Run tests
+      run: |
+        PATH="$HOME/git/bin-wrappers:$PATH" \
+          go test \
+            -mod=readonly \
+            -v \
+            ./...
+      env:
+        GO111MODULE: on
+  mac:
+    name: macOS
+    runs-on: macOS-latest
+    steps:
+    - name: Install xz
+      run: brew update && brew install xz
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+    - name: Check out code
+      uses: actions/checkout@v1
+    - name: Install Git
+      run: misc/build-git.bash ~/git 2.27.0
+    - name: Download dependencies
+      run: go mod download
+      env:
+        GO111MODULE: on
+    - name: Run tests
+      run: |
+        PATH="$HOME/git/bin-wrappers:$PATH" \
+          go test \
+            -mod=readonly \
+            -v \
+            ./...
+      env:
+        GO111MODULE: on

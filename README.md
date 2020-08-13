@@ -1,0 +1,24 @@
+# `gg-scm.io/pkg/git`
+
+[![Reference](https://pkg.go.dev/badge/gg-scm.io/pkg/git?tab=doc)](https://pkg.go.dev/gg-scm.io/pkg/git?tab=doc)
+
+`gg-scm.io/pkg/git` provides a high-level interface for interacting with a
+[Git][] subprocess in Go. It was developed for [gg][], but this library is
+useful for any program that wishes to interact with a Git repository.
+
+If you find this package useful, consider [sponsoring @zombiezen][],
+the author and maintainer.
+
+[Git]: https://git-scm.com/
+[gg]: https://gg-scm.io/
+[sponsoring @zombiezen]: https://github.com/sponsors/zombiezen
+
+## Installation
+
+```
+go get gg-scm.io/pkg/git
+```
+
+## License
+
+[Apache 2.0](LICENSE)
