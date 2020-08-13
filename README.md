@@ -5,6 +5,8 @@
 `gg-scm.io/pkg/git` provides a high-level interface for interacting with a
 [Git][] subprocess in Go. It was developed for [gg][], but this library is
 useful for any program that wishes to interact with a Git repository.
+This library is tested against Git 2.20.1 and newer. Older versions may work,
+but are not supported.
 
 If you find this package useful, consider [sponsoring @zombiezen][],
 the author and maintainer.
