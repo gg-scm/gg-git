@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/zombiezen/gg-git/compare/v0.1.0...HEAD
 
+### Added
+
+-  Add `Git.ListSubmodules` method
+
 ## [0.1.0][] - 2020-08-13
 
 This is the first release of the `gg-scm.io/pkg/git` library outside gg.

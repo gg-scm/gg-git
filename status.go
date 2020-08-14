@@ -15,11 +15,16 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 // StatusOptions specifies the command-line arguments for `git status`.
@@ -412,4 +417,74 @@ func (code DiffStatusCode) isValid() bool {
 // String returns the code letter as a string.
 func (code DiffStatusCode) String() string {
 	return string(code)
+}
+
+// A SubmoduleConfig represents a single section in a gitmodules file.
+type SubmoduleConfig struct {
+	Path TopPath
+	URL  string
+}
+
+// ListSubmodules lists the submodules of the repository based on the
+// configuration in the working copy.
+func (g *Git) ListSubmodules(ctx context.Context) (map[string]*SubmoduleConfig, error) {
+	treeDir, err := g.WorkTree(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list submodules: %w", err)
+	}
+	modulesFile := filepath.Join(treeDir, ".gitmodules")
+	if _, err := os.Stat(modulesFile); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list submodules: %w", err)
+	}
+	c := g.command(ctx, []string{g.exe, "config", "-z", "--list",
+		"--file=" + modulesFile})
+	stdout := new(bytes.Buffer)
+	c.Stdout = &limitWriter{w: stdout, n: dataOutputLimit}
+	stderr := new(bytes.Buffer)
+	c.Stderr = &limitWriter{w: stdout, n: errorOutputLimit}
+	if err := sigterm.Run(ctx, c); err != nil {
+		return nil, commandError("list submodules", err, stderr.Bytes())
+	}
+	cfg, err := parseConfig(stdout.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("list submodules: %w", err)
+	}
+	submodules := make(map[string]*SubmoduleConfig)
+	submodulePrefix := []byte("submodule.")
+	for off := 0; off < len(cfg.data); {
+		k, v, end := splitConfigEntry(cfg.data[off:])
+		if end == -1 {
+			break
+		}
+		off += end
+		// Looking for foo in "submodule.foo.setting".
+		if !bytes.HasPrefix(k, submodulePrefix) {
+			continue
+		}
+		i := bytes.LastIndexByte(k[len(submodulePrefix):], '.')
+		if i == -1 {
+			continue
+		}
+		i += len(submodulePrefix)
+
+		// Get or create remote.
+		name := string(k[len(submodulePrefix):i])
+		submodule := submodules[name]
+		if submodule == nil {
+			submodule = new(SubmoduleConfig)
+			submodules[name] = submodule
+		}
+
+		// Update appropriate setting.
+		switch string(k[i+1:]) {
+		case "path":
+			submodule.Path = TopPath(v)
+		case "url":
+			submodule.URL = string(v)
+		}
+	}
+	return submodules, nil
 }

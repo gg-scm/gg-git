@@ -15,8 +15,13 @@
 package git
 
 import (
+	"context"
 	"io"
 	"testing"
+
+	"gg-scm.io/pkg/git/internal/filesystem"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestReadStatusEntry(t *testing.T) {
@@ -238,4 +243,97 @@ func TestAffectedByStatusRenameBug(t *testing.T) {
 			t.Errorf("affectedByStatusRenameBug(%q) = %t; want %t", test.version, got, test.want)
 		}
 	}
+}
+
+func TestListSubmodules(t *testing.T) {
+	tests := []struct {
+		name        string
+		modulesFile string
+		want        map[string]*SubmoduleConfig
+	}{
+		{
+			name: "EmptyFile",
+		},
+		{
+			name: "SingleSubmodule",
+			modulesFile: "[submodule \"foo/bar\"]\n" +
+				"path = foo/bar\n" +
+				"url = https://github.com/zombiezen/gg-git.git\n",
+			want: map[string]*SubmoduleConfig{
+				"foo/bar": {
+					Path: "foo/bar",
+					URL:  "https://github.com/zombiezen/gg-git.git",
+				},
+			},
+		},
+		{
+			name: "MultipleSubmodules",
+			modulesFile: "[submodule \"foo/bar\"]\n" +
+				"path = foo/bar\n" +
+				"url = https://github.com/zombiezen/gg-git.git\n" +
+				"[submodule \"quux\"]\n" +
+				"path = quux\n" +
+				"url = https://example.com/quux.git\n",
+			want: map[string]*SubmoduleConfig{
+				"foo/bar": {
+					Path: "foo/bar",
+					URL:  "https://github.com/zombiezen/gg-git.git",
+				},
+				"quux": {
+					Path: "quux",
+					URL:  "https://example.com/quux.git",
+				},
+			},
+		},
+	}
+
+	gitPath, err := findGit()
+	if err != nil {
+		t.Skip("git not found:", err)
+	}
+	ctx := context.Background()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env, err := newTestEnv(ctx, gitPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(env.cleanup)
+			if err := env.g.Init(ctx, "."); err != nil {
+				t.Fatal(err)
+			}
+			err = env.root.Apply(filesystem.Write(".gitmodules", test.modulesFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := env.g.ListSubmodules(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(test.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("submodules (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	t.Run("NoFile", func(t *testing.T) {
+		env, err := newTestEnv(ctx, gitPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(env.cleanup)
+		if err := env.g.Init(ctx, "."); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := env.g.ListSubmodules(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want map[string]*SubmoduleConfig
+		if diff := cmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("submodules (-want +got):\n%s", diff)
+		}
+	})
 }
