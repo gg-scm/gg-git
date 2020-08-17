@@ -229,6 +229,11 @@ func (ent *TreeEntry) ObjectType() string { return ent.typ }
 // Object returns the hash of the file's Git object.
 func (ent *TreeEntry) Object() Hash { return ent.object }
 
+// String formats the entry similar to `git ls-tree` output.
+func (ent *TreeEntry) String() string {
+	return fmt.Sprintf("%v %s %v %s", ent.mode, ent.typ, ent.object, ent.path)
+}
+
 // ListTreeOptions specifies the command-line options for `git ls-tree`.
 type ListTreeOptions struct {
 	// If Pathspecs is not empty, then it is used to filter the paths.
