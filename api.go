@@ -23,7 +23,9 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	slashpath "path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,21 +190,80 @@ func (g *Git) IsAncestor(ctx context.Context, rev1, rev2 string) (bool, error) {
 	return true, nil
 }
 
+// TreeEntry represents a single entry in a Git tree object.
+// It implements os.FileInfo.
+type TreeEntry struct {
+	mode   os.FileMode
+	typ    string
+	object Hash
+	size   int64
+	path   TopPath
+}
+
+// Name returns the base name of the file.
+func (ent *TreeEntry) Name() string { return slashpath.Base(string(ent.path)) }
+
+// Path returns the file's path relative to the root of the repository.
+func (ent *TreeEntry) Path() TopPath { return ent.path }
+
+// Size returns the length in bytes for blobs.
+func (ent *TreeEntry) Size() int64 { return ent.size }
+
+// Mode returns the file mode bits.
+func (ent *TreeEntry) Mode() os.FileMode { return ent.mode }
+
+// ModTime returns the zero time. It exists purely to satisfy the
+// os.FileInfo interface.
+func (ent *TreeEntry) ModTime() time.Time { return time.Time{} }
+
+// IsDir reports whether the file mode indicates a directory.
+func (ent *TreeEntry) IsDir() bool { return ent.mode.IsDir() }
+
+// Sys returns nil. It exists purely to satisfy the os.FileInfo interface.
+func (ent *TreeEntry) Sys() interface{} { return nil }
+
+// ObjectType returns the file's Git object type. Possible values are "blob",
+// "tree", or "commit".
+func (ent *TreeEntry) ObjectType() string { return ent.typ }
+
+// Object returns the hash of the file's Git object.
+func (ent *TreeEntry) Object() Hash { return ent.object }
+
+// ListTreeOptions specifies the command-line options for `git ls-tree`.
+type ListTreeOptions struct {
+	// If Pathspecs is not empty, then it is used to filter the paths.
+	Pathspecs []Pathspec
+	// If Recursive is true, then the command will recurse into sub-trees.
+	Recursive bool
+	// If NameOnly is true, then only the keys of the map returned from ListTree
+	// will be populated (the values will be nil). This can be more efficient if
+	// information beyond the name is not needed.
+	NameOnly bool
+}
+
 // ListTree returns the list of files at a given revision.
-// If pathspecs is not empty, then it is used to filter the paths.
-func (g *Git) ListTree(ctx context.Context, rev string, pathspecs []Pathspec) (map[TopPath]struct{}, error) {
+func (g *Git) ListTree(ctx context.Context, rev string, opts ListTreeOptions) (map[TopPath]*TreeEntry, error) {
 	errPrefix := fmt.Sprintf("git ls-tree %q", rev)
 	if err := validateRev(rev); err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	args := []string{g.exe, "ls-tree", "-z", "-r", "--name-only"}
-	if len(pathspecs) == 0 {
+	args := []string{g.exe, "ls-tree", "-z"}
+	if opts.Recursive {
+		args = append(args, "-r")
+	}
+	if opts.NameOnly {
+		args = append(args, "--name-only")
+	} else {
+		// Include object size.
+		args = append(args, "--long")
+	}
+	if len(opts.Pathspecs) == 0 {
 		args = append(args, "--full-tree", rev)
 	} else {
 		// Use --full-name, as --full-tree interprets the path arguments
 		// relative to the top of the directory.
 		args = append(args, "--full-name", rev, "--")
-		for _, p := range pathspecs {
+		for _, p := range opts.Pathspecs {
 			args = append(args, p.String())
 		}
 	}
@@ -210,16 +271,82 @@ func (g *Git) ListTree(ctx context.Context, rev string, pathspecs []Pathspec) (m
 	if err != nil {
 		return nil, err
 	}
-	paths := make(map[TopPath]struct{})
-	for len(out) > 0 {
-		i := strings.IndexByte(out, 0)
-		if i == -1 {
-			return paths, fmt.Errorf("%s: %w", errPrefix, io.ErrUnexpectedEOF)
+	tree := make(map[TopPath]*TreeEntry)
+	if opts.NameOnly {
+		for len(out) > 0 {
+			i := strings.IndexByte(out, 0)
+			if i == -1 {
+				return tree, fmt.Errorf("%s: %w", errPrefix, io.ErrUnexpectedEOF)
+			}
+			tree[TopPath(out[:i])] = nil
+			out = out[i+1:]
 		}
-		paths[TopPath(out[:i])] = struct{}{}
-		out = out[i+1:]
+	} else {
+		for len(out) > 0 {
+			ent, trail, err := parseTreeEntry(out)
+			if err != nil {
+				return tree, fmt.Errorf("%s: %w", errPrefix, err)
+			}
+			tree[ent.path] = ent
+			out = trail
+		}
 	}
-	return paths, nil
+	return tree, nil
+}
+
+func parseTreeEntry(out string) (_ *TreeEntry, trail string, _ error) {
+	end := strings.IndexByte(out, 0)
+	if end == -1 {
+		return nil, "", io.ErrUnexpectedEOF
+	}
+	trail = out[end+1:]
+	entryEnd := strings.IndexByte(out[:end], '\t')
+	if entryEnd == -1 {
+		return nil, trail, errors.New("missing \\t in entry")
+	}
+	ent := &TreeEntry{path: TopPath(out[entryEnd+1 : end])}
+	parts := strings.SplitN(out[:entryEnd], " ", 4)
+	if len(parts) != 4 {
+		return nil, trail, fmt.Errorf("%s: entry has %d fields (4 expected)", ent.path, len(parts))
+	}
+
+	mode, err := strconv.ParseUint(parts[0], 8, 64)
+	if err != nil {
+		return nil, trail, fmt.Errorf("%s: mode: %v", ent.path, err)
+	}
+	const (
+		fmtMask       = 0170000
+		submoduleType = 0160000
+		linkType      = 0120000
+		dirType       = 0040000
+		regType       = 0100000
+	)
+	if mode&^(uint64(os.ModePerm)|fmtMask) != 0 {
+		return nil, trail, fmt.Errorf("%s: mode: %#o unsupported", ent.path, mode)
+	}
+	ent.mode = os.FileMode(mode) & os.ModePerm
+	switch mode & fmtMask {
+	case regType:
+	case dirType, submoduleType:
+		ent.mode |= os.ModeDir
+	case linkType:
+		ent.mode |= os.ModeSymlink
+	default:
+		return nil, trail, fmt.Errorf("%s: mode: %#o unsupported", ent.path, mode)
+	}
+
+	ent.typ = parts[1]
+	ent.object, err = ParseHash(parts[2])
+	if err != nil {
+		return nil, trail, fmt.Errorf("%s: object: %v", ent.path, err)
+	}
+	if size := strings.TrimLeft(parts[3], " "); size != "-" {
+		ent.size, err = strconv.ParseInt(size, 10, 64)
+		if err != nil {
+			return nil, trail, fmt.Errorf("%s: object size: %v", ent.path, err)
+		}
+	}
+	return ent, trail, nil
 }
 
 // Cat reads the content of a file at a particular revision.

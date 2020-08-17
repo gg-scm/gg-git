@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 -  Add `Git.ListSubmodules` method
 
+### Changed
+
+-  The signature of `Git.ListTree` has changed to support options and parse
+   full tree entries. To get the old behavior, use the `Recursive: true` and
+   `NameOnly: true` options.
+
 ## [0.1.0][] - 2020-08-13
 
 This is the first release of the `gg-scm.io/pkg/git` library outside gg.

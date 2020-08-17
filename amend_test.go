@@ -142,14 +142,18 @@ func TestAmend(t *testing.T) {
 			t.Errorf("HEAD ref = %s; want refs/heads/main", head.Ref)
 		}
 		// Verify file contents of commit.
-		wantTree := map[TopPath]struct{}{
-			"added.txt":             {},
-			"modified_staged.txt":   {},
-			"modified_unstaged.txt": {},
+		wantTree := map[TopPath]*TreeEntry{
+			"added.txt":             nil,
+			"modified_staged.txt":   nil,
+			"modified_unstaged.txt": nil,
 		}
-		if tree, err := env.g.ListTree(ctx, "HEAD", nil); err != nil {
+		tree, err := env.g.ListTree(ctx, "HEAD", ListTreeOptions{
+			Recursive: true,
+			NameOnly:  true,
+		})
+		if err != nil {
 			t.Error(err)
-		} else if diff := cmp.Diff(wantTree, tree); diff != "" {
+		} else if diff := cmp.Diff(wantTree, tree, cmp.AllowUnexported(TreeEntry{})); diff != "" {
 			t.Errorf("ListTree(ctx, \"HEAD\", nil) diff (-want +got):\n%s", diff)
 		}
 		if got, err := catFile(ctx, env.g, "HEAD", "modified_staged.txt"); err != nil {
@@ -276,14 +280,18 @@ func TestAmend(t *testing.T) {
 			t.Errorf("HEAD ref = %s; want refs/heads/main", head.Ref)
 		}
 		// Verify file contents of commit.
-		wantTree := map[TopPath]struct{}{
-			"added.txt":             {},
-			"modified_staged.txt":   {},
-			"modified_unstaged.txt": {},
+		wantTree := map[TopPath]*TreeEntry{
+			"added.txt":             nil,
+			"modified_staged.txt":   nil,
+			"modified_unstaged.txt": nil,
 		}
-		if tree, err := env.g.ListTree(ctx, "HEAD", nil); err != nil {
+		tree, err := env.g.ListTree(ctx, "HEAD", ListTreeOptions{
+			Recursive: true,
+			NameOnly:  true,
+		})
+		if err != nil {
 			t.Error(err)
-		} else if diff := cmp.Diff(wantTree, tree); diff != "" {
+		} else if diff := cmp.Diff(wantTree, tree, cmp.AllowUnexported(TreeEntry{})); diff != "" {
 			t.Errorf("ListTree(ctx, \"HEAD\", nil) diff (-want +got):\n%s", diff)
 		}
 		if got, err := catFile(ctx, env.g, "HEAD", "modified_staged.txt"); err != nil {
@@ -560,12 +568,16 @@ func TestAmendFiles(t *testing.T) {
 			t.Errorf("parents = %v; want []", got.Parents)
 		}
 		// Verify file contents of commit.
-		wantTree := map[TopPath]struct{}{
-			"bar/anchor.txt": {},
+		wantTree := map[TopPath]*TreeEntry{
+			"bar/anchor.txt": nil,
 		}
-		if tree, err := env.g.ListTree(ctx, "HEAD", nil); err != nil {
+		tree, err := env.g.ListTree(ctx, "HEAD", ListTreeOptions{
+			Recursive: true,
+			NameOnly:  true,
+		})
+		if err != nil {
 			t.Error(err)
-		} else if diff := cmp.Diff(wantTree, tree); diff != "" {
+		} else if diff := cmp.Diff(wantTree, tree, cmp.AllowUnexported(TreeEntry{})); diff != "" {
 			t.Errorf("ListTree(ctx, \"HEAD\", nil) diff (-want +got):\n%s", diff)
 		}
 	})
