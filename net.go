@@ -17,6 +17,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -116,4 +117,17 @@ func (pat RefPattern) Match(ref Ref) (suffix string, ok bool) {
 		return string(ref[len(prefix):]), true
 	}
 	return "", string(ref) == string(pat) || strings.HasSuffix(string(ref), string("/"+pat))
+}
+
+// ParseURL parses a Git remote URL, including the alternative SCP syntax.
+// See git-fetch(1) for details.
+func ParseURL(urlstr string) (*url.URL, error) {
+	if i := strings.IndexAny(urlstr, ":/"); i != -1 {
+		if tail := urlstr[i:]; !strings.HasPrefix(tail, "/") &&
+			!strings.HasPrefix(tail, "://") &&
+			!strings.HasPrefix(tail, "::") {
+			urlstr = "ssh://" + urlstr[:i] + "/" + strings.TrimPrefix(tail[1:], "/")
+		}
+	}
+	return url.Parse(urlstr)
 }
