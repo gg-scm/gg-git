@@ -147,6 +147,11 @@ func TestParseURL(t *testing.T) {
 		want    *url.URL
 		wantErr bool
 	}{
+		{
+			urlstr:  "",
+			wantErr: true,
+		},
+
 		// SSH URLs
 		{
 			urlstr: "ssh://user@host.xz:22/path/to/repo.git/",
