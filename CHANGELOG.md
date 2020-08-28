@@ -5,7 +5,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][]
 
-[Unreleased]: https://github.com/zombiezen/gg-git/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/zombiezen/gg-git/compare/v0.3.0...HEAD
+
+## [0.3.0][] - 2020-08-28
+
+Version 0.3.0 adds a function for parsing [Git URLs][].
+
+[0.3.0]: https://github.com/zombiezen/gg-git/releases/tag/v0.3.0
+[Git URLs]: https://git-scm.com/docs/git-fetch#_git_urls
 
 ### Added
 
