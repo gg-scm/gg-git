@@ -56,3 +56,12 @@ Session.vim
 tags
 ## Persistent undo
 [._]*.un~
+
+# Debian packaging
+.pc
+/obj-*/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/golang-gg-scm-pkg-git-dev/
+/debian/golang-gg-scm-pkg-git-dev.substvars

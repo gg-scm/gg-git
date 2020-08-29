@@ -1,0 +1,23 @@
+Source: golang-gg-scm-pkg-git
+Section: devel
+Priority: optional
+Maintainer: Ross Light <ross@zombiezen.com>
+Build-Depends: debhelper (>= 11),
+               dh-golang,
+               git,
+               golang-any (>= 2:1.14~~),
+               golang-github-google-go-cmp-dev,
+               golang-golang-x-sys-dev
+Standards-Version: 4.2.1
+Homepage: https://github.com/zombiezen/gg-git
+Vcs-Browser: https://github.com/zombiezen/gg-git
+Vcs-Git: https://github.com/zombiezen/gg-git.git
+XS-Go-Import-Path: gg-scm.io/pkg/git
+Testsuite: autopkgtest-pkg-go
+
+Package: golang-gg-scm-pkg-git-dev
+Architecture: all
+Depends: ${misc:Depends},
+         golang-github-google-go-cmp-dev,
+         golang-golang-x-sys-dev
+Description: High-level interface for interacting with a Git subprocess.
