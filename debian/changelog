@@ -1,5 +1,5 @@
-golang-gg-scm-pkg-git (0.3.0-1) UNRELEASED; urgency=medium
+golang-gg-scm-pkg-git (0.3.0-1) gg; urgency=medium
 
   * Initial release
 
- -- Ross Light <ross@zombiezen.com>  Sat, 29 Aug 2020 07:25:00 -0700
+ -- Ross Light <ross@zombiezen.com>  Tue, 01 Sep 2020 00:59:16 +0000
