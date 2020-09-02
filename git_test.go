@@ -70,11 +70,13 @@ func TestCommand(t *testing.T) {
 			if test.env != nil {
 				env = append([]string{}, test.env...)
 			}
-			git, err := New(gitPath, dir, Options{
+			git, err := New(Options{
+				GitExe: gitPath,
+				Dir:    dir,
+				Env:    env,
 				LogHook: func(_ context.Context, args []string) {
 					hookArgs = append([]string(nil), args...)
 				},
-				Env: env,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -158,7 +160,7 @@ type testEnv struct {
 	g    *Git
 }
 
-func newTestEnv(ctx context.Context, gitPath string) (*testEnv, error) {
+func newTestEnv(ctx context.Context, gitExe string) (*testEnv, error) {
 	topPath, err := ioutil.TempDir("", "gg_git_test")
 	if err != nil {
 		return nil, err
@@ -175,7 +177,9 @@ func newTestEnv(ctx context.Context, gitPath string) (*testEnv, error) {
 		return nil, err
 	}
 	root := filesystem.Dir(top.FromSlash("scratch"))
-	g, err := New(gitPath, root.String(), Options{
+	g, err := New(Options{
+		GitExe: gitExe,
+		Dir:    root.String(),
 		Env: []string{
 			"GIT_CONFIG_NOSYSTEM=1",
 			"HOME=" + topPath,

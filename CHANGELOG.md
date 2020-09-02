@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/zombiezen/gg-git/compare/v0.3.0...HEAD
 
+### Changed
+
+-  The signature of `New` has been changed to give all parameters reasonable
+   defaults. In particular, `Options.Env` now treats `nil` in the same way as
+   `exec.Cmd`.
+
 ## [0.3.0][] - 2020-08-28
 
 Version 0.3.0 adds a function for parsing [Git URLs][].
