@@ -169,8 +169,8 @@ func (g *Git) getVersion(ctx context.Context) (string, error) {
 	return v, nil
 }
 
-// Path returns the absolute path to the Git executable.
-func (g *Git) Path() string {
+// Exe returns the absolute path to the Git executable.
+func (g *Git) Exe() string {
 	return g.exe
 }
 

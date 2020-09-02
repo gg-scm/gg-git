@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  The signature of `New` has been changed to give all parameters reasonable
    defaults. In particular, `Options.Env` now treats `nil` in the same way as
    `exec.Cmd`.
+-  Renamed `Git.Path` method to `Git.Exe` to avoid confusion with `Git.WorkTree`
+   and `Git.GitDir`.
 
 ## [0.3.0][] - 2020-08-28
 
