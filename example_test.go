@@ -18,12 +18,69 @@ package git_test
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 
 	"gg-scm.io/pkg/git"
 )
 
-func Example() {
+func ExampleGit_Head() {
+	ctx := context.Background()
+
+	// Find the Git executable.
+	g, err := git.New(git.Options{})
+	if err != nil {
+		// handle error
+	}
+
+	// Print currently checked out revision.
+	rev, err := g.Head(ctx)
+	if err != nil {
+		// handle error
+	}
+	fmt.Println(rev.Commit.Short())
+}
+
+func ExampleGit_HeadRef() {
+	ctx := context.Background()
+
+	// Find the Git executable.
+	g, err := git.New(git.Options{})
+	if err != nil {
+		// handle error
+	}
+
+	// Print currently checked out branch.
+	ref, err := g.HeadRef(ctx)
+	if err != nil {
+		// handle error
+	}
+	if ref == "" {
+		fmt.Println("detached HEAD")
+	} else {
+		fmt.Println(ref.Branch())
+	}
+}
+
+func ExampleGit_ParseRev() {
+	ctx := context.Background()
+
+	// Find the Git executable.
+	g, err := git.New(git.Options{})
+	if err != nil {
+		// handle error
+	}
+
+	// Convert a revision reference into a commit hash.
+	rev, err := g.ParseRev(ctx, "v0.1.0")
+	if err != nil {
+		// handle error
+	}
+	// Print something like: refs/tags/v0.1.0 - 09f2632a
+	fmt.Printf("%s - %s\n", rev.Ref, rev.Commit.Short())
+}
+
+func ExampleGit_Commit() {
 	ctx := context.Background()
 
 	// Find the Git executable.
@@ -47,4 +104,73 @@ func Example() {
 	if err != nil {
 		// handle error
 	}
+}
+
+func ExampleConfig() {
+	ctx := context.Background()
+
+	// Find the Git executable.
+	g, err := git.New(git.Options{})
+	if err != nil {
+		// handle error
+	}
+
+	// Read the repository configuration.
+	cfg, err := g.ReadConfig(ctx)
+	if err != nil {
+		// handle error
+	}
+
+	// Read a particular configuration value.
+	fmt.Println("Hello,", cfg.Value("user.name"))
+}
+
+func ExampleRemote() {
+	ctx := context.Background()
+
+	// Find the Git executable.
+	g, err := git.New(git.Options{})
+	if err != nil {
+		// handle error
+	}
+
+	// Read the repository configuration.
+	cfg, err := g.ReadConfig(ctx)
+	if err != nil {
+		// handle error
+	}
+
+	// Get details about a particular remote.
+	remotes := cfg.ListRemotes()
+	origin := remotes["origin"]
+	if origin == nil {
+		fmt.Println("No origin remote")
+	} else {
+		fmt.Println("Fetching from", origin.FetchURL)
+	}
+}
+
+func ExampleParseURL() {
+	u, err := git.ParseURL("https://github.com/octocat/example")
+	if err != nil {
+		// handle error
+	}
+	fmt.Printf("HTTP URL: scheme=%s host=%s path=%s\n", u.Scheme, u.Host, u.Path)
+
+	u, err = git.ParseURL("ssh://git@github.com/octocat/example.git")
+	if err != nil {
+		// handle error
+	}
+	fmt.Printf("SSH URL: scheme=%s host=%s user=%s path=%s\n", u.Scheme, u.Host, u.User.Username(), u.Path)
+
+	u, err = git.ParseURL("git@github.com:octocat/example.git")
+	if err != nil {
+		// handle error
+	}
+	fmt.Printf("SCP URL: scheme=%s host=%s user=%s path=%s\n", u.Scheme, u.Host, u.User.Username(), u.Path)
+
+	// Output:
+	// HTTP URL: scheme=https host=github.com path=/octocat/example
+	// SSH URL: scheme=ssh host=github.com user=git path=/octocat/example.git
+	// SCP URL: scheme=ssh host=github.com user=git path=/octocat/example.git
 }
