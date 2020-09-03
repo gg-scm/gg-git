@@ -23,34 +23,34 @@ on: push
 #     tags:
 #     - debian/**
 jobs:
-  build:
-    name: Build Package
-    runs-on: ubuntu-latest
-    container:
-      image: debian:unstable
-    steps:
-    - name: Install dev tools
-      run: apt-get update && apt-get install -y --no-install-recommends devscripts equivs git-buildpackage
-    - name: Check out code
-      uses: actions/checkout@v2
-      with:
-        # Check out everything, since we need upstream tags.
-        fetch-depth: 0
-    - name: Install build dependencies
-      run: mk-build-deps --install --remove --tool="apt-get -y --no-install-recommends" && rm -f *.buildinfo *.changes
-    - name: Build package
-      run: gbp buildpackage --git-export-dir=build --git-upstream-tree=SLOPPY --no-sign --git-debian-branch=debian-workflow
-    - uses: actions/upload-artifact@v2
-      with:
-        name: deb
-        path: |
-          build/*.deb
-          build/*.dsc
-          build/*.tar.xz
-          build/*.tar.gz
+  # build:
+  #   name: Build Package
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: debian:unstable
+  #   steps:
+  #   - name: Install dev tools
+  #     run: apt-get update && apt-get install -y --no-install-recommends devscripts equivs git-buildpackage
+  #   - name: Check out code
+  #     uses: actions/checkout@v2
+  #     with:
+  #       # Check out everything, since we need upstream tags.
+  #       fetch-depth: 0
+  #   - name: Install build dependencies
+  #     run: mk-build-deps --install --remove --tool="apt-get -y --no-install-recommends" && rm -f *.buildinfo *.changes
+  #   - name: Build package
+  #     run: gbp buildpackage --git-export-dir=build --git-upstream-tree=SLOPPY --no-sign --git-debian-branch=debian-workflow
+  #   - uses: actions/upload-artifact@v2
+  #     with:
+  #       name: deb
+  #       path: |
+  #         build/*.deb
+  #         build/*.dsc
+  #         build/*.tar.xz
+  #         build/*.tar.gz
   upload:
     name: Upload Package
-    needs: build
+    # needs: build
     runs-on: ubuntu-latest
     # if: startsWith(github.ref, 'refs/tags/debian/')
     steps:
@@ -64,14 +64,15 @@ jobs:
       uses: actions/setup-go@v1
       with:
         go-version: 1.15
-    - name: Copy artifacts from build
-      uses: actions/download-artifact@v2
-      with:
-        name: deb
+    # - name: Copy artifacts from build
+    #   uses: actions/download-artifact@v2
+    #   with:
+    #     name: deb
     - name: Install aptblob
       run: go get zombiezen.com/go/aptblob
       env:
+        GOPATH: ${{ env.home }}
         GO111MODULE: on
     - name: Run aptblob
-      run: aptblob --help
+      run: ${{ env.home }}/bin/aptblob --help
 
