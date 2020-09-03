@@ -53,6 +53,10 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/debian/')
     steps:
+    - name: Download GCP credentials
+      run: echo "$GOOGLE_KEY_JSON" > ~/gcp.json
+      env:
+        GOOGLE_KEY_JSON: ${{secrets.GOOGLE_KEY_JSON}}
     - name: Install GnuPG
       run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
     - name: Import signing key
@@ -72,5 +76,5 @@ jobs:
       env:
         GO111MODULE: on
     - name: Run aptblob
-      run: ~/bin/aptblob --help
+      run: GOOGLE_APPLICATION_CREDENTIALS="$HOME/gcp.json" ~/bin/aptblob upload -k EB23676A7D0F99534E1FE43FE4C2729A30CA32C4 gs://gg-scm-apt gg *.deb *.dsc
 
