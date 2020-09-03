@@ -71,8 +71,8 @@ jobs:
     - name: Install aptblob
       run: go get zombiezen.com/go/aptblob
       env:
-        GOPATH: ${{ env.home }}
+        GOPATH: ${{ env.HOME }}
         GO111MODULE: on
     - name: Run aptblob
-      run: ${{ env.home }}/bin/aptblob --help
+      run: ${{ env.HOME }}/bin/aptblob --help
 
