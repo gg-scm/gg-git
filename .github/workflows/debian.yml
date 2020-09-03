@@ -51,7 +51,7 @@ jobs:
   upload:
     name: Upload Package
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/debian/')
+    # if: startsWith(github.ref, 'refs/tags/debian/')
     steps:
     - name: Install GnuPG
       run: apt-get update && apt-get install -y --no-install-recommends gnupg
@@ -59,4 +59,18 @@ jobs:
       run: echo "$APT_SIGNING_KEY" | gpg --import --batch --no-tty
       env:
         APT_SIGNING_KEY: ${{secrets.APT_SIGNING_KEY}}
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+    - name: Copy artifacts from build
+      uses: actions/download-artifact@v2
+      with:
+        name: deb
+    - name: Install aptblob
+      run: go get zombiezen.com/go/aptblob
+      env:
+        GO111MODULE: on
+    - name: Run aptblob
+      run: aptblob --help
 
