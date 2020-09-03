@@ -39,7 +39,7 @@ jobs:
     - name: Install build dependencies
       run: mk-build-deps --install --remove --tool="apt-get -y --no-install-recommends" && rm -f *.buildinfo *.changes
     - name: Build package
-      run: gbp buildpackage --git-export-dir=build --git-upstream-tree=SLOPPY --no-sign
+      run: gbp buildpackage --git-export-dir=build --git-upstream-tree=SLOPPY --no-sign --git-ignore-branch
     - uses: actions/upload-artifact@v2
       with:
         name: deb
