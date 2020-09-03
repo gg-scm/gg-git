@@ -50,11 +50,12 @@ jobs:
           build/*.tar.gz
   upload:
     name: Upload Package
+    needs: build
     runs-on: ubuntu-latest
     # if: startsWith(github.ref, 'refs/tags/debian/')
     steps:
     - name: Install GnuPG
-      run: apt-get update && apt-get install -y --no-install-recommends gnupg
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
     - name: Import signing key
       run: echo "$APT_SIGNING_KEY" | gpg --import --batch --no-tty
       env:
