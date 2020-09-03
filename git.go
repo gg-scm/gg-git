@@ -45,48 +45,65 @@ type Git struct {
 	version     string
 }
 
-// Options specifies optional parameters to New.
+// Options holds the parameters for New.
 type Options struct {
+	// Dir is the working directory to run the Git subprocess from.
+	// If empty, uses this process's working directory.
+	Dir string
+
+	// Env specifies the environment of the subprocess.
+	// If Env == nil, then the process's environment will be used.
+	// If len(Env) == 0, then no environment variables will be set.
+	Env []string
+
+	// GitExe is the name of or a path to a Git executable.
+	// It is treated in the same manner as the argument to exec.LookPath.
+	// An empty string is treated the same as "git".
+	GitExe string
+
 	// LogHook is a function that will be called at the start of every Git
 	// subprocess.
 	LogHook func(ctx context.Context, args []string)
-
-	// Env specifies the environment of the subprocess.
-	// If len(Env) == 0, then no environment variables will be set.
-	Env []string
 }
 
 // New creates a new Git context.
-func New(path string, wd string, opts Options) (*Git, error) {
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("path to git must be absolute (got %q)", path)
-	}
-	if wd == "" {
-		return nil, errors.New("init git: working directory must not be blank")
-	}
-
-	path = filepath.Clean(path)
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat git: %w", err)
-	}
-	m := info.Mode()
-	if m.IsDir() || m&0111 == 0 {
-		return nil, fmt.Errorf("stat git: not an executable file")
-	}
-
-	wd, err = filepath.Abs(wd)
-	if err != nil {
-		return nil, fmt.Errorf("init git: resolve working directory: %w", err)
-	}
-
+func New(opts Options) (*Git, error) {
+	var err error
 	g := &Git{
-		exe: path,
-		dir: wd,
+		log: opts.LogHook,
 	}
-	g.log = opts.LogHook
-	g.env = make([]string, len(opts.Env))
-	copy(g.env, opts.Env)
+
+	if opts.Dir == "" {
+		g.dir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("init git: %w", err)
+		}
+		g.dir = filepath.Clean(g.dir)
+	} else {
+		g.dir, err = filepath.Abs(opts.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("init git: %w", err)
+		}
+	}
+
+	if opts.Env != nil {
+		// Using make because append doesn't guarantee capacity.
+		g.env = make([]string, len(opts.Env))
+		copy(g.env, opts.Env)
+	}
+
+	if opts.GitExe == "" {
+		opts.GitExe = "git"
+	}
+	g.exe, err = exec.LookPath(opts.GitExe)
+	if err != nil {
+		return nil, fmt.Errorf("init git: %w", err)
+	}
+	g.exe, err = filepath.Abs(g.exe)
+	if err != nil {
+		return nil, fmt.Errorf("init git: %w", err)
+	}
+
 	return g, nil
 }
 
@@ -152,8 +169,8 @@ func (g *Git) getVersion(ctx context.Context) (string, error) {
 	return v, nil
 }
 
-// Path returns the absolute path to the Git executable.
-func (g *Git) Path() string {
+// Exe returns the absolute path to the Git executable.
+func (g *Git) Exe() string {
 	return g.exe
 }
 

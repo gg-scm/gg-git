@@ -3,9 +3,26 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased][]
+## [0.4.1][] - 2020-09-02
 
-[Unreleased]: https://github.com/zombiezen/gg-git/compare/v0.3.0...HEAD
+Version 0.4.1 added Debian package release automation.
+
+[0.4.1]: https://github.com/zombiezen/gg-git/releases/tag/v0.4.1
+
+## [0.4.0][] - 2020-09-02
+
+Version 0.4.0 changed the signature of a few functions and added some example
+code to the documentation.
+
+[0.4.0]: https://github.com/zombiezen/gg-git/releases/tag/v0.4.0
+
+### Changed
+
+-  The signature of `New` has been changed to give all parameters reasonable
+   defaults. In particular, `Options.Env` now treats `nil` in the same way as
+   `exec.Cmd`.
+-  Renamed `Git.Path` method to `Git.Exe` to avoid confusion with `Git.WorkTree`
+   and `Git.GitDir`.
 
 ## [0.3.0][] - 2020-08-28
 
