@@ -29,14 +29,18 @@ jobs:
       image: debian:unstable
     steps:
     - name: Install dev tools
-      run: apt-get update && apt-get install -y --no-install-recommends devscripts equivs git-buildpackage
+      run: |-
+        apt-get update
+        apt-get install -y --no-install-recommends devscripts equivs git-buildpackage
     - name: Check out code
       uses: actions/checkout@v2
       with:
         # Check out everything, since we need upstream tags.
         fetch-depth: 0
     - name: Install build dependencies
-      run: mk-build-deps --install --remove --tool="apt-get -y --no-install-recommends" && rm -f *.buildinfo *.changes
+      run: |-
+        mk-build-deps --install --remove --tool="apt-get -o Debug::pkgProblemResolver=yes -y --no-install-recommends"
+        rm -f *.buildinfo *.changes
     - name: Build package
       run: gbp buildpackage --git-export-dir=build --no-sign --git-ignore-branch
     - uses: actions/upload-artifact@v2
@@ -58,7 +62,9 @@ jobs:
       env:
         GOOGLE_KEY_JSON: ${{secrets.GOOGLE_KEY_JSON}}
     - name: Install GnuPG
-      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
+      run: |-
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends gnupg
     - name: Import signing key
       run: echo "$APT_SIGNING_KEY" | gpg --import --batch --no-tty
       env:
