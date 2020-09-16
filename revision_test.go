@@ -16,11 +16,20 @@ package git
 
 import (
 	"context"
+	"encoding"
 	"strings"
 	"testing"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
 	"github.com/google/go-cmp/cmp"
+)
+
+// Verify that Hash implements the various encoding interfaces.
+var (
+	_ encoding.TextMarshaler     = Hash{}
+	_ encoding.TextUnmarshaler   = &Hash{}
+	_ encoding.BinaryMarshaler   = Hash{}
+	_ encoding.BinaryUnmarshaler = &Hash{}
 )
 
 func TestHash(t *testing.T) {
@@ -47,6 +56,9 @@ func TestHash(t *testing.T) {
 	for _, test := range tests {
 		if got := test.h.String(); got != test.s {
 			t.Errorf("Hash(%x).String() = %q; want %q", test.h[:], got, test.s)
+		}
+		if got, err := test.h.MarshalText(); err != nil || string(got) != test.s {
+			t.Errorf("Hash(%x).MarshalText() = %q, %v; want %q, <nil>", test.h[:], got, err, test.s)
 		}
 		if got := test.h.Short(); got != test.short {
 			t.Errorf("Hash(%x).Short() = %q; want %q", test.h[:], got, test.short)
