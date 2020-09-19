@@ -118,6 +118,9 @@ func TestListTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	submodHead, err := submodGit.Head(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	submod := &TreeEntry{
 		path:   "submod",
 		typ:    "commit",
