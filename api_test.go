@@ -17,22 +17,12 @@ package git
 import (
 	"context"
 	"errors"
-	"os/exec"
 	"testing"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
 )
 
 func TestCommandError(t *testing.T) {
-	falsePath, err := exec.LookPath("false")
-	if err != nil {
-		t.Skip("could not find false:", err)
-	}
-	exitError := exec.Command(falsePath).Run()
-	if _, ok := exitError.(*exec.ExitError); !ok {
-		t.Fatalf("ran %s, got: %v; want exit error", falsePath, exitError)
-	}
-
 	tests := []struct {
 		prefix   string
 		runError error
@@ -47,8 +37,8 @@ func TestCommandError(t *testing.T) {
 		},
 		{
 			prefix:   "git commit",
-			runError: exitError,
-			want:     "git commit: " + exitError.Error(),
+			runError: fakeExitError(1),
+			want:     "git commit: " + fakeExitError(1).Error(),
 		},
 		{
 			prefix:   "git commit",
@@ -64,7 +54,7 @@ func TestCommandError(t *testing.T) {
 		},
 		{
 			prefix:   "git commit",
-			runError: exitError,
+			runError: fakeExitError(1),
 			stderr:   "fatal: everything failed\n",
 			want:     "git commit: fatal: everything failed",
 		},
@@ -82,7 +72,7 @@ func TestCommandError(t *testing.T) {
 		},
 		{
 			prefix:   "git commit",
-			runError: exitError,
+			runError: fakeExitError(1),
 			stderr:   "fatal: everything failed\nThis is the work of Voldemort.\n",
 			want:     "git commit:\nfatal: everything failed\nThis is the work of Voldemort.",
 		},

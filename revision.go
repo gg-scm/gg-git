@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"gg-scm.io/pkg/git/internal/sigterm"
@@ -177,7 +176,7 @@ func (g *Git) HeadRef(ctx context.Context) (Ref, error) {
 	stderr := new(bytes.Buffer)
 	c.Stderr = &limitWriter{w: stderr, n: errorOutputLimit}
 	if err := sigterm.Run(ctx, c); err != nil {
-		if err, ok := err.(*exec.ExitError); ok && exitStatus(err.ProcessState) == 1 {
+		if exitCode(err) == 1 {
 			// Not a symbolic ref: detached HEAD.
 			return "", nil
 		}
@@ -233,8 +232,7 @@ func (g *Git) ListRefs(ctx context.Context) (map[Ref]Hash, error) {
 	const errPrefix = "git show-ref"
 	out, err := g.output(ctx, errPrefix, []string{g.exe, "show-ref", "--dereference", "--head"})
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitStatus(exitErr.ProcessState) == 1 && len(out) == 0 {
+		if exitCode(err) == 1 && len(out) == 0 {
 			return nil, nil
 		}
 		return nil, err

@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	slashpath "path"
 	"path/filepath"
 	"strconv"
@@ -162,7 +161,7 @@ func (g *Git) IsAncestor(ctx context.Context, rev1, rev2 string) (bool, error) {
 	stderr := new(bytes.Buffer)
 	c.Stderr = stderr
 	if err := sigterm.Run(ctx, c); err != nil {
-		if err, ok := err.(*exec.ExitError); ok && exitStatus(err.ProcessState) == 1 {
+		if exitCode(err) == 1 {
 			return false, nil
 		}
 		return false, commandError(errPrefix, err, stderr.Bytes())
@@ -1067,7 +1066,7 @@ func commandError(prefix string, runError error, stderr []byte) error {
 	if len(stderr) == 0 {
 		return fmt.Errorf("%s: %w", prefix, runError)
 	}
-	if _, isExit := runError.(*exec.ExitError); isExit {
+	if exitCode(runError) != -1 {
 		if bytes.IndexByte(stderr, '\n') == -1 {
 			// Collapse into single line.
 			return fmt.Errorf("%s: %s", prefix, stderr)
