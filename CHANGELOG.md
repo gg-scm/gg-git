@@ -3,9 +3,13 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased][]
+## [0.6.0][] - 2020-09-27
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.5.0...main
+Version 0.6 introduced an interface for supplying your own Git process creation
+mechanism. This was introduced with very little change in public-facing API, so
+I'm fairly confident that the API can remain stable.
+
+[0.6.0]: https://github.com/gg-scm/gg-git/releases/tag/v0.6.0
 
 ### Added
 
@@ -13,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    `Runner`, allows the user to provide their own mechanism for running a Git
    subprocess. This can be used to communicate with a Git process over SSH or
    in a container, for example. ([#1]https://github.com/gg-scm/gg-git/issues/1))
+
+### Changed
+
+-  `GitDir` and `CommonDir` now directly use the Git subprocess to determine
+   the directory paths rather than rely on kludges. This doesn't work on Git
+   2.13.1 or below, but these versions have not been supported for some time.
 
 ### Deprecated
 
