@@ -154,6 +154,59 @@ func TestOutput(t *testing.T) {
 	}
 }
 
+func TestIndexCommand(t *testing.T) {
+	tests := []struct {
+		args []string
+		want int
+	}{
+		{
+			args: nil,
+			want: 0,
+		},
+		{
+			args: []string{"diff"},
+			want: 0,
+		},
+		{
+			args: []string{"diff", "-p"},
+			want: 0,
+		},
+		{
+			args: []string{"-p", "diff", "-p"},
+			want: 1,
+		},
+		{
+			args: []string{"-C", "foo", "diff", "-p"},
+			want: 2,
+		},
+		{
+			args: []string{"-pC", "foo", "diff", "-p"},
+			want: 2,
+		},
+		{
+			args: []string{"--work-tree", "foo"},
+			want: 2,
+		},
+		{
+			args: []string{"--work-tree=foo", "foo"},
+			want: 1,
+		},
+		{
+			args: []string{"--work-treex", "foo"},
+			want: 1,
+		},
+		{
+			args: []string{"--work-treex", "foo", "bar"},
+			want: 1,
+		},
+	}
+	for _, test := range tests {
+		if got := indexCommand(test.args); got != test.want {
+			t.Errorf("indexCommand(%q) = %d; want %d", test.args, got, test.want)
+		}
+	}
+}
+
 type testEnv struct {
 	top  filesystem.Dir
 	root filesystem.Dir

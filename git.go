@@ -253,12 +253,46 @@ func oneLine(s string) (string, error) {
 }
 
 func errorSubject(args []string) string {
-	for i, a := range args {
-		if !strings.HasPrefix(a, "-") && (i == 0 || args[i-1] != "-c") {
-			return "git " + a
+	i := indexCommand(args)
+	if i >= len(args) {
+		return "git"
+	}
+	return "git " + args[i]
+}
+
+// indexCommand finds the index of the first non-global-option argument in a Git
+// argument list or len(args) if no such argument could be found.
+func indexCommand(args []string) int {
+scanArgs:
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			return i
+		}
+		if !strings.HasPrefix(a, "--") {
+			// Short option. Check last character of argument.
+			if strings.IndexByte(globalShortOptionsWithArgs, a[len(a)-1]) != -1 {
+				i++
+			}
+			continue scanArgs
+		}
+		for _, opt := range globalLongOptionsWithArgs {
+			if a[2:] == opt {
+				i++
+				continue scanArgs
+			}
 		}
 	}
-	return "git"
+	return len(args)
+}
+
+var globalShortOptionsWithArgs = "cC"
+
+var globalLongOptionsWithArgs = []string{
+	"exec-path",
+	"git-dir",
+	"work-tree",
+	"namespace",
 }
 
 type limitWriter struct {
