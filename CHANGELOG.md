@@ -16,7 +16,7 @@ I'm fairly confident that the API can remain stable.
 -  The Git subprocess invocation can now be customized. A new interface,
    `Runner`, allows the user to provide their own mechanism for running a Git
    subprocess. This can be used to communicate with a Git process over SSH or
-   in a container, for example. ([#1]https://github.com/gg-scm/gg-git/issues/1))
+   in a container, for example. ([#1](https://github.com/gg-scm/gg-git/issues/1))
 
 ### Changed
 
