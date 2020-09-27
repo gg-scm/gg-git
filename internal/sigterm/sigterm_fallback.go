@@ -20,8 +20,6 @@ import (
 	"os"
 )
 
-var signals = []os.Signal{os.Interrupt}
-
 func terminate(proc *os.Process) error {
 	return proc.Kill()
 }
