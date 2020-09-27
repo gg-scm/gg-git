@@ -21,10 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
-
-	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 // StatusOptions specifies the command-line arguments for `git status`.
@@ -43,7 +40,7 @@ func (g *Git) Status(ctx context.Context, opts StatusOptions) ([]StatusEntry, er
 	if version, err := g.getVersion(ctx); err == nil && affectedByStatusRenameBug(version) {
 		renameBug = true
 	}
-	args := []string{g.exe}
+	var args []string
 	if opts.DisableRenames {
 		args = append(args, "-c", "status.renames=false")
 	}
@@ -289,7 +286,7 @@ func (g *Git) DiffStatus(ctx context.Context, opts DiffStatusOptions) ([]DiffSta
 			return nil, fmt.Errorf("diff status: %w", err)
 		}
 	}
-	args := []string{g.exe, "diff", "--name-status", "-z"}
+	args := []string{"diff", "--name-status", "-z"}
 	if opts.DisableRenames {
 		args = append(args, "--no-renames")
 	}
@@ -432,20 +429,22 @@ func (g *Git) ListSubmodules(ctx context.Context) (map[string]*SubmoduleConfig, 
 	if err != nil {
 		return nil, fmt.Errorf("list submodules: %w", err)
 	}
-	modulesFile := filepath.Join(treeDir, ".gitmodules")
+	modulesFile := g.fs.Join(treeDir, ".gitmodules")
 	if _, err := os.Stat(modulesFile); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("list submodules: %w", err)
 	}
-	c := g.command(ctx, []string{g.exe, "config", "-z", "--list",
-		"--file=" + modulesFile})
 	stdout := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: stdout, n: dataOutputLimit}
 	stderr := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: stdout, n: errorOutputLimit}
-	if err := sigterm.Run(ctx, c); err != nil {
+	err = g.runner.RunGit(ctx, &Invocation{
+		Args:   []string{"config", "-z", "--list", "--file=" + modulesFile},
+		Dir:    g.dir,
+		Stdout: &limitWriter{w: stdout, n: dataOutputLimit},
+		Stderr: &limitWriter{w: stdout, n: errorOutputLimit},
+	})
+	if err != nil {
 		return nil, commandError("list submodules", err, stderr.Bytes())
 	}
 	cfg, err := parseConfig(stdout.Bytes())

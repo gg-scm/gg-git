@@ -23,8 +23,6 @@ import (
 	"io"
 	"strings"
 	"time"
-
-	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 // CommitInfo stores information about a single commit.
@@ -69,7 +67,6 @@ func (g *Git) CommitInfo(ctx context.Context, rev string) (*CommitInfo, error) {
 	}
 
 	out, err := g.output(ctx, errPrefix, []string{
-		g.exe,
 		"log",
 		"--max-count=1",
 		"-z",
@@ -176,7 +173,7 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 			return nil, fmt.Errorf("%s: %w", errPrefix, err)
 		}
 	}
-	args := []string{g.exe, "log", "-z", "--pretty=" + commitInfoPrettyFormat}
+	args := []string{"log", "-z", "--pretty=" + commitInfoPrettyFormat}
 	if opts.MaxParents > 0 || opts.AllowZeroMaxParents {
 		args = append(args, fmt.Sprintf("--max-parents=%d", opts.MaxParents))
 	}
@@ -191,30 +188,29 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 	}
 	args = append(args, opts.Revs...)
 	args = append(args, "--")
-	c := g.command(ctx, args)
-	pipe, err := c.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", errPrefix, err)
-	}
-	stderr := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: stderr, n: 4096}
+
 	ctx, cancel := context.WithCancel(ctx)
-	wait, err := sigterm.Start(ctx, c)
+	stderr := new(bytes.Buffer)
+	pipe, err := StartPipe(ctx, g.runner, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Stderr: &limitWriter{w: stderr, n: 4096},
+	})
 	if err != nil {
 		cancel()
-		pipe.Close()
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
+
 	r := bufio.NewReaderSize(pipe, 1<<20 /* 1 MiB */)
-	if _, err := r.Peek(1); err != nil && err != io.EOF {
+	if _, err := r.Peek(1); err != nil && !errors.Is(err, io.EOF) {
 		cancel()
-		waitErr := wait()
+		waitErr := pipe.Close()
 		return nil, commandError(errPrefix, waitErr, stderr.Bytes())
 	}
 	return &Log{
 		r:      r,
 		cancel: cancel,
-		wait:   wait,
+		close:  pipe,
 	}, nil
 }
 
@@ -223,7 +219,7 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 type Log struct {
 	r      *bufio.Reader
 	cancel context.CancelFunc
-	wait   func() error
+	close  io.Closer
 
 	scanErr  error
 	scanDone bool
@@ -320,6 +316,6 @@ func (l *Log) Close() error {
 	// require this to be supported.
 
 	l.cancel()
-	l.wait() // Ignore error, since it's probably from interrupting.
+	l.close.Close() // Ignore error, since it's probably from interrupting.
 	return l.scanErr
 }

@@ -27,7 +27,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestCommand(t *testing.T) {
+var _ Piper = new(Local)
+
+func TestLocalCommand(t *testing.T) {
 	gitPath, err := findGit()
 	if err != nil {
 		t.Skip("git not found:", err)
@@ -40,7 +42,7 @@ func TestCommand(t *testing.T) {
 		{
 			name:    "NilEnv",
 			env:     nil,
-			wantEnv: []string{},
+			wantEnv: os.Environ(),
 		},
 		{
 			name:    "EmptyEnv",
@@ -70,9 +72,8 @@ func TestCommand(t *testing.T) {
 			if test.env != nil {
 				env = append([]string{}, test.env...)
 			}
-			git, err := New(Options{
+			l, err := NewLocal(Options{
 				GitExe: gitPath,
-				Dir:    dir,
 				Env:    env,
 				LogHook: func(_ context.Context, args []string) {
 					hookArgs = append([]string(nil), args...)
@@ -81,7 +82,13 @@ func TestCommand(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := git.Command(ctx, "commit", "-m", "Hello, World!")
+			c, err := l.command(ctx, &Invocation{
+				Dir:  dir,
+				Args: []string{"commit", "-m", "Hello, World!"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if c.Path != gitPath {
 				t.Errorf("c.Path = %q; want %q", c.Path, gitPath)
 			}

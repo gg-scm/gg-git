@@ -20,8 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 // Config is a collection of configuration settings.
@@ -31,12 +29,15 @@ type Config struct {
 
 // ReadConfig reads all the configuration settings from Git.
 func (g *Git) ReadConfig(ctx context.Context) (*Config, error) {
-	c := g.command(ctx, []string{g.exe, "config", "-z", "--list"})
 	stdout := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: stdout, n: dataOutputLimit}
 	stderr := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: stdout, n: errorOutputLimit}
-	if err := sigterm.Run(ctx, c); err != nil {
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   []string{"config", "-z", "--list"},
+		Dir:    g.dir,
+		Stdout: &limitWriter{w: stdout, n: dataOutputLimit},
+		Stderr: &limitWriter{w: stdout, n: errorOutputLimit},
+	})
+	if err != nil {
 		return nil, commandError("read git config", err, stderr.Bytes())
 	}
 	cfg, err := parseConfig(stdout.Bytes())

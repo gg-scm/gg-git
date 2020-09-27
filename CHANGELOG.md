@@ -3,6 +3,28 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased][]
+
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.5.0...main
+
+### Added
+
+-  The Git subprocess invocation can now be customized. A new interface,
+   `Runner`, allows the user to provide their own mechanism for running a Git
+   subprocess. This can be used to communicate with a Git process over SSH or
+   in a container, for example. ([#1]https://github.com/gg-scm/gg-git/issues/1))
+
+### Deprecated
+
+-  The `*Git.Exe` method has been deprecated in favor of the newly introduced
+   `*Local.Exe`.
+
+### Removed
+
+-  The `*Git.Command` method has been removed because it was infeasible to
+   support with the new `Runner` structure. The `Runner` interface provides
+   an easier API that works across process-starting mechanisms.
+
 ## [0.5.0][] - 2020-09-16
 
 Version 0.5.0 added marshal/unmarshal methods to `git.Hash`.

@@ -79,20 +79,21 @@ func TestCommitInfo(t *testing.T) {
 		)
 		wantAuthorTime := time.Date(2018, time.February, 20, 15, 47, 42, 0, time.FixedZone("UTC-8", -8*60*60))
 		wantCommitTime := time.Date(2018, time.December, 29, 8, 58, 24, 0, time.FixedZone("UTC-8", -8*60*60))
-		{
-			c := env.g.Command(ctx, "commit", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
+		err = env.g.Runner().RunGit(ctx, &Invocation{
+			Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+			Dir:  env.root.FromSlash("."),
+			Env: []string{
+				"GIT_AUTHOR_NAME=" + wantAuthorName,
+				"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
 				"GIT_AUTHOR_DATE=2018-02-20T15:47:42-08:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
+				"GIT_COMMITTER_NAME=" + wantCommitterName,
+				"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
 				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader(wantMsg)
-			if err := c.Run(); err != nil {
-				t.Fatal(err)
-			}
+			},
+			Stdin: strings.NewReader(wantMsg),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		got, err := env.g.CommitInfo(ctx, "HEAD")
 		if err != nil {
@@ -140,20 +141,21 @@ func TestCommitInfo(t *testing.T) {
 		if err := env.g.Run(ctx, "add", "foo.txt"); err != nil {
 			t.Fatal(err)
 		}
-		{
-			c := env.g.Command(ctx, "commit", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
+		err = env.g.Runner().RunGit(ctx, &Invocation{
+			Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+			Dir:  env.root.FromSlash("."),
+			Env: []string{
+				"GIT_AUTHOR_NAME=" + wantAuthorName,
+				"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
 				"GIT_AUTHOR_DATE=2018-02-20T15:47:42-08:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
+				"GIT_COMMITTER_NAME=" + wantCommitterName,
+				"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
 				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader("initial import")
-			if err := c.Run(); err != nil {
-				t.Fatal(err)
-			}
+			},
+			Stdin: strings.NewReader("initial import"),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := env.g.Remove(ctx, []Pathspec{"foo.txt"}, RemoveOptions{}); err != nil {
 			t.Fatal(err)
@@ -163,17 +165,20 @@ func TestCommitInfo(t *testing.T) {
 		wantAuthorTime := time.Date(2018, time.March, 21, 16, 26, 9, 0, time.FixedZone("UTC-7", -7*60*60))
 		wantCommitTime := time.Date(2018, time.December, 29, 8, 58, 24, 0, time.FixedZone("UTC-8", -8*60*60))
 		{
-			c := env.g.Command(ctx, "commit", "--quiet", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
-				"GIT_AUTHOR_DATE=2018-03-21T16:26:09-07:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
-				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader(wantMsg)
-			if err := c.Run(); err != nil {
+			err := env.g.Runner().RunGit(ctx, &Invocation{
+				Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+				Dir:  env.root.FromSlash("."),
+				Env: []string{
+					"GIT_AUTHOR_NAME=" + wantAuthorName,
+					"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
+					"GIT_AUTHOR_DATE=2018-03-21T16:26:09-07:00",
+					"GIT_COMMITTER_NAME=" + wantCommitterName,
+					"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
+					"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
+				},
+				Stdin: strings.NewReader(wantMsg),
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -227,20 +232,21 @@ func TestCommitInfo(t *testing.T) {
 		if err := env.g.Run(ctx, "add", "foo.txt"); err != nil {
 			t.Fatal(err)
 		}
-		{
-			c := env.g.Command(ctx, "commit", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
+		err = env.g.Runner().RunGit(ctx, &Invocation{
+			Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+			Dir:  env.root.FromSlash("."),
+			Env: []string{
+				"GIT_AUTHOR_NAME=" + wantAuthorName,
+				"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
 				"GIT_AUTHOR_DATE=2018-02-20T15:47:42-08:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
+				"GIT_COMMITTER_NAME=" + wantCommitterName,
+				"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
 				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader("initial import")
-			if err := c.Run(); err != nil {
-				t.Fatal(err)
-			}
+			},
+			Stdin: strings.NewReader("initial import"),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := env.root.Apply(filesystem.Write("bar.txt", dummyContent)); err != nil {
 			t.Fatal(err)
@@ -248,20 +254,21 @@ func TestCommitInfo(t *testing.T) {
 		if err := env.g.Run(ctx, "add", "bar.txt"); err != nil {
 			t.Fatal(err)
 		}
-		{
-			c := env.g.Command(ctx, "commit", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
+		err = env.g.Runner().RunGit(ctx, &Invocation{
+			Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+			Dir:  env.root.FromSlash("."),
+			Env: []string{
+				"GIT_AUTHOR_NAME=" + wantAuthorName,
+				"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
 				"GIT_AUTHOR_DATE=2018-02-21T15:49:58-08:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
+				"GIT_COMMITTER_NAME=" + wantCommitterName,
+				"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
 				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader("first parent")
-			if err := c.Run(); err != nil {
-				t.Fatal(err)
-			}
+			},
+			Stdin: strings.NewReader("first parent"),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := env.g.Run(ctx, "checkout", "--quiet", "-b", "diverge", "HEAD~"); err != nil {
 			t.Fatal(err)
@@ -272,20 +279,21 @@ func TestCommitInfo(t *testing.T) {
 		if err := env.g.Run(ctx, "add", "baz.txt"); err != nil {
 			t.Fatal(err)
 		}
-		{
-			c := env.g.Command(ctx, "commit", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
+		err = env.g.Runner().RunGit(ctx, &Invocation{
+			Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+			Dir:  env.root.FromSlash("."),
+			Env: []string{
+				"GIT_AUTHOR_NAME=" + wantAuthorName,
+				"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
 				"GIT_AUTHOR_DATE=2018-02-21T17:07:53-08:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
+				"GIT_COMMITTER_NAME=" + wantCommitterName,
+				"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
 				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader("second parent")
-			if err := c.Run(); err != nil {
-				t.Fatal(err)
-			}
+			},
+			Stdin: strings.NewReader("second parent"),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := env.g.Run(ctx, "checkout", "--quiet", "main"); err != nil {
 			t.Fatal(err)
@@ -296,20 +304,21 @@ func TestCommitInfo(t *testing.T) {
 		const wantMsg = "Merge branch 'diverge' into branch main\n"
 		wantAuthorTime := time.Date(2018, time.February, 21, 19, 37, 26, 0, time.FixedZone("UTC-8", -8*60*60))
 		wantCommitTime := time.Date(2018, time.December, 29, 8, 58, 24, 0, time.FixedZone("UTC-8", -8*60*60))
-		{
-			c := env.g.Command(ctx, "commit", "--cleanup=verbatim", "--file=-")
-			c.Env = append(c.Env,
-				"GIT_AUTHOR_NAME="+wantAuthorName,
-				"GIT_AUTHOR_EMAIL="+wantAuthorEmail,
+		err = env.g.Runner().RunGit(ctx, &Invocation{
+			Args: []string{"commit", "--quiet", "--cleanup=verbatim", "--file=-"},
+			Dir:  env.root.FromSlash("."),
+			Env: []string{
+				"GIT_AUTHOR_NAME=" + wantAuthorName,
+				"GIT_AUTHOR_EMAIL=" + wantAuthorEmail,
 				"GIT_AUTHOR_DATE=2018-02-21T19:37:26-08:00",
-				"GIT_COMMITTER_NAME="+wantCommitterName,
-				"GIT_COMMITTER_EMAIL="+wantCommitterEmail,
+				"GIT_COMMITTER_NAME=" + wantCommitterName,
+				"GIT_COMMITTER_EMAIL=" + wantCommitterEmail,
 				"GIT_COMMITTER_DATE=2018-12-29T08:58:24-08:00",
-			)
-			c.Stdin = strings.NewReader(wantMsg)
-			if err := c.Run(); err != nil {
-				t.Fatal(err)
-			}
+			},
+			Stdin: strings.NewReader(wantMsg),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 
 		got, err := env.g.CommitInfo(ctx, "HEAD")

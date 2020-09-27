@@ -21,8 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 // hashSize is the number of bytes in a hash.
@@ -170,19 +168,15 @@ func (g *Git) Head(ctx context.Context) (*Rev, error) {
 // error. The ref may not point to a valid commit.
 func (g *Git) HeadRef(ctx context.Context) (Ref, error) {
 	const errPrefix = "head ref"
-	c := g.command(ctx, []string{g.exe, "symbolic-ref", "--quiet", "HEAD"})
-	stdout := new(strings.Builder)
-	c.Stdout = &limitWriter{w: stdout, n: dataOutputLimit}
-	stderr := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: stderr, n: errorOutputLimit}
-	if err := sigterm.Run(ctx, c); err != nil {
+	stdout, err := g.output(ctx, errPrefix, []string{"symbolic-ref", "--quiet", "HEAD"})
+	if err != nil {
 		if exitCode(err) == 1 {
 			// Not a symbolic ref: detached HEAD.
 			return "", nil
 		}
-		return "", commandError(errPrefix, err, stderr.Bytes())
+		return "", err
 	}
-	name, err := oneLine(stdout.String())
+	name, err := oneLine(stdout)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -196,7 +190,7 @@ func (g *Git) ParseRev(ctx context.Context, refspec string) (*Rev, error) {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "rev-parse", "-q", "--verify", "--revs-only", refspec + "^0"})
+	out, err := g.output(ctx, errPrefix, []string{"rev-parse", "-q", "--verify", "--revs-only", refspec + "^0"})
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +203,7 @@ func (g *Git) ParseRev(ctx context.Context, refspec string) (*Rev, error) {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 
-	out, err = g.output(ctx, errPrefix, []string{g.exe, "rev-parse", "-q", "--verify", "--revs-only", "--symbolic-full-name", refspec})
+	out, err = g.output(ctx, errPrefix, []string{"rev-parse", "-q", "--verify", "--revs-only", "--symbolic-full-name", refspec})
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +224,7 @@ func (g *Git) ParseRev(ctx context.Context, refspec string) (*Rev, error) {
 // ListRefs lists all of the refs in the repository with tags dereferenced.
 func (g *Git) ListRefs(ctx context.Context) (map[Ref]Hash, error) {
 	const errPrefix = "git show-ref"
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "show-ref", "--dereference", "--head"})
+	out, err := g.output(ctx, errPrefix, []string{"show-ref", "--dereference", "--head"})
 	if err != nil {
 		if exitCode(err) == 1 && len(out) == 0 {
 			return nil, nil
@@ -248,7 +242,7 @@ func (g *Git) ListRefs(ctx context.Context) (map[Ref]Hash, error) {
 // dereferenced.
 func (g *Git) ListRefsVerbatim(ctx context.Context) (map[Ref]Hash, error) {
 	const errPrefix = "git show-ref"
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "show-ref", "--head"})
+	out, err := g.output(ctx, errPrefix, []string{"show-ref", "--head"})
 	if err != nil {
 		return nil, err
 	}
@@ -370,12 +364,16 @@ func (g *Git) MutateRefs(ctx context.Context, muts map[Ref]RefMutation) error {
 		return nil
 	}
 
-	c := g.command(ctx, []string{g.exe, "update-ref", "--stdin", "-z"})
-	c.Stdin = input
 	output := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: output, n: errorOutputLimit}
-	c.Stdout = c.Stderr
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: output, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   []string{"update-ref", "--stdin", "-z"},
+		Dir:    g.dir,
+		Stdin:  input,
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError("git update-ref", err, output.Bytes())
 	}
 	return nil
