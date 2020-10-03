@@ -498,6 +498,101 @@ func TestLog(t *testing.T) {
 	}
 }
 
+func TestLog_NoWalk(t *testing.T) {
+	gitPath, err := findGit()
+	if err != nil {
+		t.Skip("git not found:", err)
+	}
+	ctx := context.Background()
+	env, err := newTestEnv(ctx, gitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer env.cleanup()
+
+	// Create a repository with a merge commit.
+	//
+	// The commits created in this test are entirely deterministic
+	// because the dates and users are fixed, so their hashes will always
+	// be the same.
+	const (
+		wantAuthorName     = "Lisbeth Salander"
+		wantAuthorEmail    = "lisbeth@example.com"
+		wantCommitterName  = "Octo Cat"
+		wantCommitterEmail = "noreply@github.com"
+	)
+	commitOpts := func(t time.Time) CommitOptions {
+		return CommitOptions{
+			Author: User{
+				Name:  wantAuthorName,
+				Email: wantAuthorEmail,
+			},
+			AuthorTime: t,
+			Committer: User{
+				Name:  wantCommitterName,
+				Email: wantCommitterEmail,
+			},
+			CommitTime: t,
+		}
+	}
+	if err := env.g.Init(ctx, "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.root.Apply(filesystem.Write("foo.txt", dummyContent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Add(ctx, []Pathspec{"foo.txt"}, AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	const wantMessage0 = "initial import\n"
+	wantTime0 := time.Date(2018, time.February, 20, 15, 47, 42, 0, time.FixedZone("UTC-8", -8*60*60))
+	if err := env.g.Commit(ctx, wantMessage0, commitOpts(wantTime0)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := env.root.Apply(filesystem.Write("bar.txt", dummyContent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Add(ctx, []Pathspec{"bar.txt"}, AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	const wantMessage1 = "first parent\n"
+	wantTime1 := time.Date(2018, time.February, 21, 15, 49, 58, 0, time.FixedZone("UTC-8", -8*60*60))
+	if err := env.g.Commit(ctx, wantMessage1, commitOpts(wantTime1)); err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := env.g.Log(ctx, LogOptions{NoWalk: true})
+	if err != nil {
+		t.Fatal("Log:", err)
+	}
+	var got []*CommitInfo
+	for log.Next() {
+		got = append(got, log.CommitInfo())
+	}
+	if err := log.Close(); err != nil {
+		t.Error("Close:", err)
+	}
+	author := User{Name: wantAuthorName, Email: wantAuthorEmail}
+	committer := User{Name: wantCommitterName, Email: wantCommitterEmail}
+	hash0 := Hash{0x3b, 0x1b, 0x50, 0xc3, 0xe4, 0x27, 0xa6, 0x8f, 0x73, 0x3f, 0xe8, 0x7a, 0x74, 0x0f, 0x8f, 0x74, 0x3c, 0xe3, 0x13, 0xb7}
+	hash1 := Hash{0x9d, 0x74, 0xc2, 0x89, 0x91, 0x5c, 0x29, 0xbc, 0xda, 0xc1, 0x74, 0xc4, 0x77, 0x85, 0x8c, 0x51, 0x0c, 0x64, 0x7c, 0xf0}
+	want := []*CommitInfo{
+		{
+			Hash:       hash1,
+			Parents:    []Hash{hash0},
+			Author:     author,
+			Committer:  committer,
+			AuthorTime: wantTime1,
+			CommitTime: wantTime1,
+			Message:    wantMessage1,
+		},
+	}
+	if diff := cmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("log diff (-want +got):\n%s", diff)
+	}
+}
+
 func equateTruncatedTime(d time.Duration) cmp.Option {
 	return cmp.Comparer(func(t1, t2 time.Time) bool {
 		return t1.Truncate(d).Equal(t2.Truncate(d))

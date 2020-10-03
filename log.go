@@ -70,7 +70,7 @@ func (g *Git) CommitInfo(ctx context.Context, rev string) (*CommitInfo, error) {
 		"log",
 		"--max-count=1",
 		"-z",
-		"--pretty=tformat:%H%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B",
+		"--pretty=" + commitInfoPrettyFormat,
 		rev,
 		"--",
 	})
@@ -160,6 +160,10 @@ type LogOptions struct {
 
 	// If Reverse is true, then commits will be returned in reverse order.
 	Reverse bool
+
+	// If NoWalk is true, then ancestor commits are not traversed. Does not have
+	// an effect if Revs contains a range.
+	NoWalk bool
 }
 
 // Log starts fetching information about a set of commits. The context's
@@ -185,6 +189,9 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 	}
 	if opts.Reverse {
 		args = append(args, "--reverse")
+	}
+	if opts.NoWalk {
+		args = append(args, "--no-walk=sorted")
 	}
 	args = append(args, opts.Revs...)
 	args = append(args, "--")
