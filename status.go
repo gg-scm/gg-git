@@ -36,9 +36,11 @@ type StatusOptions struct {
 
 // Status returns any differences the working copy has from the files at HEAD.
 func (g *Git) Status(ctx context.Context, opts StatusOptions) ([]StatusEntry, error) {
-	renameBug := false
-	if version, err := g.getVersion(ctx); err == nil && affectedByStatusRenameBug(version) {
-		renameBug = true
+	mode := acceptRenames
+	if opts.DisableRenames {
+		mode = rewriteLocalRenames
+	} else if version, err := g.getVersion(ctx); err == nil && affectedByStatusRenameBug(version) {
+		mode = localRenameMissingName
 	}
 	var args []string
 	if opts.DisableRenames {
@@ -60,13 +62,11 @@ func (g *Git) Status(ctx context.Context, opts StatusOptions) ([]StatusEntry, er
 	}
 	var entries []StatusEntry
 	for len(stdout) > 0 {
-		var ent StatusEntry
 		var err error
-		ent, stdout, err = readStatusEntry(stdout, renameBug)
+		entries, stdout, err = readStatusEntry(entries, stdout, mode)
 		if err != nil {
 			return entries, err
 		}
-		entries = append(entries, ent)
 	}
 	return entries, nil
 }
@@ -75,7 +75,7 @@ func (g *Git) Status(ctx context.Context, opts StatusOptions) ([]StatusEntry, er
 // emits incorrect output for locally renamed files.
 //
 // In the affected versions, Git will only list the missing source file,
-// not the new added file. See https://github.com/zombiezen/gg/issues/60
+// not the new added file. See https://github.com/gg-scm/gg/issues/60
 // for a full explanation.
 func affectedByStatusRenameBug(version string) bool {
 	prefixes := []string{
@@ -105,37 +105,52 @@ type StatusEntry struct {
 	From TopPath
 }
 
-func readStatusEntry(data string, renameBug bool) (StatusEntry, string, error) {
+// Rename behaviors.
+const (
+	acceptRenames = iota
+
+	// localRenameMissingName is used if Git will provide the From field, but not
+	// the Name field for a local rename. See https://github.com/gg-scm/gg/issues/60
+	localRenameMissingName
+
+	// rewriteLocalRenames is used if the caller wants readStatusEntry to
+	// return an add and a delete if Git outputs a local rename.
+	// See https://github.com/gg-scm/gg-git/issues/3. This is an issue with
+	// Git versions before 2.18.
+	rewriteLocalRenames
+)
+
+func readStatusEntry(entries []StatusEntry, data string, mode int) ([]StatusEntry, string, error) {
 	// Read status code and space.
 	if len(data) == 0 {
-		return StatusEntry{}, "", io.EOF
+		return entries, "", io.EOF
 	}
 	if len(data) < 4 { // 2 bytes + 1 space + 1 NUL
-		return StatusEntry{}, data, errors.New("read status entry: unexpected EOF")
+		return entries, data, errors.New("read status entry: unexpected EOF")
 	}
 	var ent StatusEntry
 	copy(ent.Code[:], data)
 	if data[2] != ' ' {
-		return StatusEntry{}, data, fmt.Errorf("read status entry: expected ' ', got %q", data[2])
+		return entries, data, fmt.Errorf("read status entry: expected ' ', got %q", data[2])
 	}
 
 	// Read name and from.
 	i := strings.IndexByte(data[3:], 0)
 	if i == -1 {
-		return StatusEntry{}, "", errors.New("read status entry: unexpected EOF reading name")
+		return entries, "", errors.New("read status entry: unexpected EOF reading name")
 	}
 	ent.Name = TopPath(data[3 : 3+i])
 	data = data[4+i:]
-	if renameBug && ent.Code[0] == ' ' && ent.Code[1] == 'R' {
+	if mode == localRenameMissingName && ent.Code[0] == ' ' && ent.Code[1] == 'R' {
 		// See doc for affectedByStatusRenameBug for explanation.
 		ent.From = ent.Name
 		ent.Name = ""
-		return ent, data, nil
+		return append(entries, ent), data, nil
 	}
 	if ent.Code[0] == 'R' || ent.Code[0] == 'C' || ent.Code[1] == 'R' || ent.Code[1] == 'C' {
 		i := strings.IndexByte(data, 0)
 		if i == -1 {
-			return StatusEntry{}, "", errors.New("read status entry: unexpected EOF reading from")
+			return entries, "", errors.New("read status entry: unexpected EOF reading 'from' filename")
 		}
 		ent.From = TopPath(data[:i])
 		data = data[i+1:]
@@ -143,9 +158,16 @@ func readStatusEntry(data string, renameBug bool) (StatusEntry, string, error) {
 
 	// Check code validity at very end in order to consume as much as possible.
 	if !ent.Code.isValid() {
-		return StatusEntry{}, data, fmt.Errorf("read status entry: invalid code %q %q", ent.Code[0], ent.Code[1])
+		return entries, data, fmt.Errorf("read status entry: invalid code %q %q", ent.Code[0], ent.Code[1])
 	}
-	return ent, data, nil
+	// https://github.com/gg-scm/gg-git/issues/3
+	if mode == rewriteLocalRenames && ent.Code[0] == ' ' && ent.Code[1] == 'R' {
+		return append(entries,
+			StatusEntry{Code: StatusCode{' ', 'A'}, Name: ent.Name},
+			StatusEntry{Code: StatusCode{' ', 'D'}, Name: ent.From},
+		), data, nil
+	}
+	return append(entries, ent), data, nil
 }
 
 // String returns the entry in short format.
