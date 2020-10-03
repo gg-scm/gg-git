@@ -36,6 +36,15 @@ type CommitInfo struct {
 	Message    string
 }
 
+// Summary returns the first line of the message.
+func (c *CommitInfo) Summary() string {
+	i := strings.IndexByte(c.Message, '\n')
+	if i == -1 {
+		return c.Message
+	}
+	return c.Message[:i]
+}
+
 // User identifies an author or committer.
 type User struct {
 	// Name is the user's full name.

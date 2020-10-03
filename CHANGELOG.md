@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 -  The `LogOptions.NoWalk` field permits reading commits in bulk without having
    to process their ancestors. ([#2](https://github.com/gg-scm/gg-git/issues/2))
+-  The `CommitInfo.Summary` method returns the first line of a commit message.
 
 ## [0.6.0][] - 2020-09-27
 
