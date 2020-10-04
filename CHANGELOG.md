@@ -3,6 +3,17 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2][] - 2020-10-04
+
+Version 0.7.2 removed the Windows color no-op.
+
+[0.7.2]: https://github.com/gg-scm/gg-git/releases/tag/v0.7.2
+
+### Fixed
+
+-  `*Config.Color` and `*Config.ColorBool` no longer no-op on Windows.
+   ([gg-scm/gg#125](https://github.com/gg-scm/gg/issues/125))
+
 ## [0.7.1][] - 2020-10-03
 
 Version 0.7.1 fixed an issue with working copy renames on old versions of Git.
