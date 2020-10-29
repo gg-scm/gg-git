@@ -458,8 +458,11 @@ type AddOptions struct {
 	IntentToAdd bool
 }
 
-// Add adds file contents to the index.
+// Add adds file contents to the index. If len(pathspecs) == 0, then Add returns nil.
 func (g *Git) Add(ctx context.Context, pathspecs []Pathspec, opts AddOptions) error {
+	if len(pathspecs) == 0 {
+		return nil
+	}
 	args := []string{"add"}
 	if opts.IncludeIgnored {
 		args = append(args, "-f")

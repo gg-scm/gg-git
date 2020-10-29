@@ -3,6 +3,14 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.7.2...main
+
+## [Unreleased]
+
+### Changed
+
+-  `Git.Add` will no-op if passed no pathspecs.
+
 ## [0.7.2][] - 2020-10-04
 
 Version 0.7.2 removed the Windows color no-op.
