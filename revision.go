@@ -17,67 +17,20 @@ package git
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+
+	"gg-scm.io/pkg/git/githash"
 )
 
-// hashSize is the number of bytes in a hash.
-const hashSize = 20
-
 // A Hash is the SHA-1 hash of a Git object.
-type Hash [hashSize]byte
+type Hash = githash.SHA1
 
 // ParseHash parses a hex-encoded hash. It is the same as calling UnmarshalText
 // on a new Hash.
 func ParseHash(s string) (Hash, error) {
-	var h Hash
-	err := h.UnmarshalText([]byte(s))
-	return h, err
-}
-
-// String returns the hex-encoded hash.
-func (h Hash) String() string {
-	return hex.EncodeToString(h[:])
-}
-
-// Short returns the first 4 hex-encoded bytes of the hash.
-func (h Hash) Short() string {
-	return hex.EncodeToString(h[:4])
-}
-
-// MarshalText returns the hex-encoded hash.
-func (h Hash) MarshalText() ([]byte, error) {
-	buf := make([]byte, hex.EncodedLen(len(h)))
-	hex.Encode(buf, h[:])
-	return buf, nil
-}
-
-// UnmarshalText decodes a hex-encoded hash into h.
-func (h *Hash) UnmarshalText(s []byte) error {
-	if len(s) != hex.EncodedLen(hashSize) {
-		return fmt.Errorf("parse git hash %q: wrong size", s)
-	}
-	if _, err := hex.Decode(h[:], s); err != nil {
-		return fmt.Errorf("parse git hash %q: %w", s, err)
-	}
-	return nil
-}
-
-// MarshalBinary returns the hash as a byte slice.
-func (h Hash) MarshalBinary() ([]byte, error) {
-	return h[:], nil
-}
-
-// UnmarshalBinary copies the bytes from b into h. It returns an error if
-// len(b) != len(*h).
-func (h *Hash) UnmarshalBinary(b []byte) error {
-	if len(b) != len(*h) {
-		return fmt.Errorf("parse git binary hash %x: wrong size", b)
-	}
-	copy(h[:], b)
-	return nil
+	return githash.ParseSHA1(s)
 }
 
 // A Ref is a Git reference to a commit.
