@@ -244,7 +244,15 @@ func TestReadDiffStatusEntry(t *testing.T) {
 		},
 		{
 			name: "Renamed",
-			data: "R00\x00foo.txt\x00bar.txt\x00",
+			data: "R100\x00foo.txt\x00bar.txt\x00",
+			want: DiffStatusEntry{
+				Code: 'R',
+				Name: "bar.txt",
+			},
+		},
+		{
+			name: "RenamedPartial",
+			data: "R045\x00foo.txt\x00bar.txt\x00",
 			want: DiffStatusEntry{
 				Code: 'R',
 				Name: "bar.txt",
@@ -252,9 +260,9 @@ func TestReadDiffStatusEntry(t *testing.T) {
 		},
 		{
 			name:      "RenamedScoreTooLong",
-			data:      "R000\x00foo.txt\x00bar.txt\x00",
+			data:      "R0000\x00foo.txt\x00bar.txt\x00",
 			err:       func(e error) bool { return e != nil && e != io.EOF },
-			remaining: "R000\x00foo.txt\x00bar.txt\x00",
+			remaining: "R0000\x00foo.txt\x00bar.txt\x00",
 		},
 		{
 			name: "Multiple",

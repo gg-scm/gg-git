@@ -362,7 +362,7 @@ func readDiffStatusEntry(data string) (DiffStatusEntry, string, error) {
 	// Read NUL.
 	if hasFrom {
 		foundNul := false
-		for i := 1; i < 4 && i < len(data); i++ {
+		for i := 1; i < 5 && i < len(data); i++ {
 			if data[i] == 0 {
 				foundNul = true
 				data = data[i+1:]

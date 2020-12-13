@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 -  `Git.Add` will no-op if passed no pathspecs.
 
+### Fixed
+
+-  `Git.DiffStatus` will no longer return an error on valid renames.
+
 ## [0.7.2][] - 2020-10-04
 
 Version 0.7.2 removed the Windows color no-op.
