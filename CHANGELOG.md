@@ -3,9 +3,13 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.7.2...main
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.7.3...main
 
-## [Unreleased]
+## [0.7.3][] - 2020-12-13
+
+Version 0.7.3 releases minor fixes.
+
+[0.7.3]: https://github.com/gg-scm/gg-git/releases/tag/v0.7.3
 
 ### Changed
 
@@ -14,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 -  `Git.DiffStatus` will no longer return an error on valid renames.
+   ([gg-scm/gg#129](https://github.com/gg-scm/gg/issues/129))
 
 ## [0.7.2][] - 2020-10-04
 
