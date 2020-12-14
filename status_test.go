@@ -26,11 +26,11 @@ import (
 
 func TestReadStatusEntry(t *testing.T) {
 	tests := []struct {
-		name      string
-		data      string
-		renameBug bool
+		name string
+		data string
+		mode int
 
-		want      StatusEntry
+		want      []StatusEntry
 		remaining string
 		err       func(error) bool
 	}{
@@ -42,10 +42,10 @@ func TestReadStatusEntry(t *testing.T) {
 		{
 			name: "ModifiedWorkTree",
 			data: " M foo.txt\x00",
-			want: StatusEntry{
+			want: []StatusEntry{{
 				Code: StatusCode{' ', 'M'},
 				Name: "foo.txt",
-			},
+			}},
 		},
 		{
 			name: "MissingNul",
@@ -55,85 +55,163 @@ func TestReadStatusEntry(t *testing.T) {
 		{
 			name: "ModifiedIndex",
 			data: "MM foo.txt\x00",
-			want: StatusEntry{
+			want: []StatusEntry{{
 				Code: StatusCode{'M', 'M'},
 				Name: "foo.txt",
-			},
+			}},
 		},
 		{
 			name: "Renamed",
 			data: "R  bar.txt\x00foo.txt\x00",
-			want: StatusEntry{
+			want: []StatusEntry{{
 				Code: StatusCode{'R', ' '},
 				Name: "bar.txt",
 				From: "foo.txt",
-			},
+			}},
 		},
 		{
 			// Regression test for https://github.com/zombiezen/gg/issues/44
-			name:      "RenamedLocally",
-			data:      " R bar.txt\x00foo.txt\x00",
-			renameBug: false,
-			want: StatusEntry{
+			name: "RenamedLocally",
+			data: " R bar.txt\x00foo.txt\x00",
+			mode: acceptRenames,
+			want: []StatusEntry{{
 				Code: StatusCode{' ', 'R'},
 				Name: "bar.txt",
 				From: "foo.txt",
-			},
+			}},
 		},
 		{
 			// Test for Git bug described in https://github.com/zombiezen/gg/issues/60
-			name:      "RenamedLocally_GoodInputWithGitBug",
-			data:      " R bar.txt\x00foo.txt\x00",
-			renameBug: true,
-			want: StatusEntry{
+			name: "RenamedLocally_GoodInputWithGitBug",
+			data: " R bar.txt\x00foo.txt\x00",
+			mode: localRenameMissingName,
+			want: []StatusEntry{{
 				Code: StatusCode{' ', 'R'},
 				Name: "",
 				From: "bar.txt",
-			},
+			}},
 			remaining: "foo.txt\x00",
 		},
 		{
 			// Test for Git bug described in https://github.com/zombiezen/gg/issues/60
-			name:      "RenamedLocally_GitBug",
-			data:      " R bar.txt\x00 A foo.txt\x00",
-			renameBug: true,
-			want: StatusEntry{
+			name: "RenamedLocally_GitBug",
+			data: " R bar.txt\x00 A foo.txt\x00",
+			mode: localRenameMissingName,
+			want: []StatusEntry{{
 				Code: StatusCode{' ', 'R'},
 				Name: "",
 				From: "bar.txt",
-			},
+			}},
 			remaining: " A foo.txt\x00",
 		},
 		{
 			name: "Multiple",
 			data: "R  bar.txt\x00foo.txt\x00MM baz.txt\x00",
-			want: StatusEntry{
+			want: []StatusEntry{{
 				Code: StatusCode{'R', ' '},
 				Name: "bar.txt",
 				From: "foo.txt",
-			},
+			}},
 			remaining: "MM baz.txt\x00",
+		},
+		{
+			name: "DisabledRenames",
+			data: " R bar.txt\x00foo.txt\x00",
+			mode: rewriteLocalRenames,
+			want: []StatusEntry{
+				{
+					Code: StatusCode{' ', 'A'},
+					Name: "bar.txt",
+				},
+				{
+					Code: StatusCode{' ', 'D'},
+					Name: "foo.txt",
+				},
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, remaining, err := readStatusEntry(test.data, test.renameBug)
+			got, remaining, err := readStatusEntry(nil, test.data, test.mode)
 			if err == nil {
 				if test.err != nil {
-					t.Fatalf("readStatusEntry(%q, %t) = %+v, %q, <nil>; want %+v, %q, <non-nil>", test.data, test.renameBug, got, remaining, test.want, test.remaining)
+					t.Fatalf("readStatusEntry(%q, %d) = %+v, %q, <nil>; want %+v, %q, <non-nil>", test.data, test.mode, got, remaining, test.want, test.remaining)
 				}
-				if got != test.want || remaining != test.remaining {
-					t.Fatalf("readStatusEntry(%q, %t) = %+v, %q, <nil>; want %+v, %q, <nil>", test.data, test.renameBug, got, remaining, test.want, test.remaining)
+				if !cmp.Equal(got, test.want, cmpopts.EquateEmpty()) || remaining != test.remaining {
+					t.Fatalf("readStatusEntry(%q, %d) = %+v, %q, <nil>; want %+v, %q, <nil>", test.data, test.mode, got, remaining, test.want, test.remaining)
 				}
 			} else {
 				if test.err == nil {
-					t.Fatalf("readStatusEntry(%q, %t) = _, %q, %v; want %+v, %q, <nil>", test.data, test.renameBug, remaining, err, test.want, test.remaining)
+					t.Fatalf("readStatusEntry(%q, %d) = _, %q, %v; want %+v, %q, <nil>", test.data, test.mode, remaining, err, test.want, test.remaining)
 				}
 				if remaining != test.remaining || !test.err(err) {
-					t.Fatalf("readStatusEntry(%q, %t) = _, %q, %v; want _, %q, <non-nil>", test.data, test.renameBug, remaining, err, test.remaining)
+					t.Fatalf("readStatusEntry(%q, %d) = _, %q, %v; want _, %q, <non-nil>", test.data, test.mode, remaining, err, test.remaining)
 				}
 			}
 		})
+	}
+}
+
+// Regression test for https://github.com/gg-scm/gg-git/issues/3
+func TestDisableRenamesStatus(t *testing.T) {
+	gitPath, err := findGit()
+	if err != nil {
+		t.Skip("git not found:", err)
+	}
+	ctx := context.Background()
+	env, err := newTestEnv(ctx, gitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(env.cleanup)
+	if err := env.g.Init(ctx, "."); err != nil {
+		t.Fatal(err)
+	}
+	err = env.root.Apply(
+		filesystem.Write("foo.txt", dummyContent),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Add(ctx, []Pathspec{"."}, AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Commit(ctx, "hello world", CommitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	err = env.root.Apply(
+		filesystem.Remove("foo.txt"),
+		filesystem.Write("bar.txt", dummyContent),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Add(ctx, []Pathspec{"bar.txt"}, AddOptions{IntentToAdd: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := env.g.Status(ctx, StatusOptions{
+		DisableRenames: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []StatusEntry{
+		{Code: StatusCode{' ', 'D'}, Name: "foo.txt"},
+		{Code: StatusCode{' ', 'A'}, Name: "bar.txt"},
+	}
+	diff := cmp.Diff(want, st,
+		cmpopts.SortSlices(func(ent1, ent2 StatusEntry) bool {
+			return ent1.Name < ent2.Name
+		}),
+		// Force String-ification in diff output.
+		cmp.Comparer(func(s1, s2 StatusCode) bool {
+			return s1 == s2
+		}),
+	)
+	if diff != "" {
+		t.Errorf("status (-want +got):\n%s", diff)
 	}
 }
 
@@ -166,7 +244,15 @@ func TestReadDiffStatusEntry(t *testing.T) {
 		},
 		{
 			name: "Renamed",
-			data: "R00\x00foo.txt\x00bar.txt\x00",
+			data: "R100\x00foo.txt\x00bar.txt\x00",
+			want: DiffStatusEntry{
+				Code: 'R',
+				Name: "bar.txt",
+			},
+		},
+		{
+			name: "RenamedPartial",
+			data: "R045\x00foo.txt\x00bar.txt\x00",
 			want: DiffStatusEntry{
 				Code: 'R',
 				Name: "bar.txt",
@@ -174,9 +260,9 @@ func TestReadDiffStatusEntry(t *testing.T) {
 		},
 		{
 			name:      "RenamedScoreTooLong",
-			data:      "R000\x00foo.txt\x00bar.txt\x00",
+			data:      "R0000\x00foo.txt\x00bar.txt\x00",
 			err:       func(e error) bool { return e != nil && e != io.EOF },
-			remaining: "R000\x00foo.txt\x00bar.txt\x00",
+			remaining: "R0000\x00foo.txt\x00bar.txt\x00",
 		},
 		{
 			name: "Multiple",

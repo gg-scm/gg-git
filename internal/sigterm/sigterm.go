@@ -17,14 +17,8 @@ package sigterm // import "gg-scm.io/pkg/git/internal/sigterm"
 
 import (
 	"context"
-	"os"
 	"os/exec"
 )
-
-// Signals returns the list of signals to listen for graceful termination.
-func Signals() []os.Signal {
-	return append([]os.Signal(nil), signals...)
-}
 
 // Start is like calling Start on os/exec.CommandContext but uses
 // SIGTERM on Unix-based systems.

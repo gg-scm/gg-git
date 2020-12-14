@@ -20,23 +20,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
-	"os/exec"
 	slashpath "path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-
-	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 // WorkTree determines the absolute path of the root of the current
 // working tree given the configuration. Any symlinks are resolved.
 func (g *Git) WorkTree(ctx context.Context) (string, error) {
 	const errPrefix = "find git work tree root"
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "rev-parse", "--show-toplevel"})
+	out, err := g.output(ctx, errPrefix, []string{"rev-parse", "--show-toplevel"})
 	if err != nil {
 		return "", err
 	}
@@ -44,7 +39,7 @@ func (g *Git) WorkTree(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	evaled, err := filepath.EvalSymlinks(line)
+	evaled, err := g.fs.EvalSymlinks(line)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -55,7 +50,7 @@ func (g *Git) WorkTree(ctx context.Context) (string, error) {
 // of the working tree.
 func (g *Git) prefix(ctx context.Context) (string, error) {
 	const errPrefix = "prefix"
-	prefix, err := g.output(ctx, errPrefix, []string{g.exe, "rev-parse", "--show-prefix"})
+	prefix, err := g.output(ctx, errPrefix, []string{"rev-parse", "--show-prefix"})
 	if err != nil {
 		return "", err
 	}
@@ -69,10 +64,8 @@ func (g *Git) prefix(ctx context.Context) (string, error) {
 // GitDir determines the absolute path of the Git directory for this
 // working tree given the configuration. Any symlinks are resolved.
 func (g *Git) GitDir(ctx context.Context) (string, error) {
-	// TODO(someday): Use --absolute-git-dir when minimum supported
-	// Git version >= 2.13.2.
 	const errPrefix = "find .git directory"
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "rev-parse", "--git-dir"})
+	out, err := g.output(ctx, errPrefix, []string{"rev-parse", "--absolute-git-dir"})
 	if err != nil {
 		return "", err
 	}
@@ -80,13 +73,7 @@ func (g *Git) GitDir(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	var path string
-	if filepath.IsAbs(line) {
-		path = filepath.Clean(line)
-	} else {
-		path = filepath.Join(g.dir, line)
-	}
-	evaled, err := filepath.EvalSymlinks(path)
+	evaled, err := g.fs.EvalSymlinks(g.fs.Clean(line))
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -97,33 +84,20 @@ func (g *Git) GitDir(ctx context.Context) (string, error) {
 // shared among different working trees, given the configuration. Any
 // symlinks are resolved.
 func (g *Git) CommonDir(ctx context.Context) (string, error) {
-	// TODO(someday): Use --git-common-dir when minimum supported
-	// Git version > 2.12.5. See https://github.com/zombiezen/gg/issues/105.
 	const errPrefix = "find .git directory"
-	for i := len(g.env) - 1; i >= 0; i-- {
-		e := g.env[i]
-		const envVar = "GIT_COMMON_DIR="
-		if len(e) > len(envVar) && strings.HasPrefix(e, envVar) {
-			return e[len(envVar):], nil
-		}
-	}
-	dir, err := g.GitDir(ctx)
+	out, err := g.output(ctx, errPrefix, []string{"rev-parse", "--git-common-dir"})
 	if err != nil {
 		return "", err
 	}
-	commonDirData, err := ioutil.ReadFile(filepath.Join(dir, "commondir"))
-	commonDir := dir
-	if err == nil {
-		commonDir = strings.TrimSuffix(string(commonDirData), "\n")
-		if filepath.IsAbs(commonDir) {
-			commonDir = filepath.Clean(commonDir)
-		} else {
-			commonDir = filepath.Join(dir, commonDir)
-		}
-	} else if !os.IsNotExist(err) {
+	line, err := oneLine(out)
+	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	evaled, err := filepath.EvalSymlinks(commonDir)
+	commonDir := g.abs(line)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	evaled, err := g.fs.EvalSymlinks(commonDir)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -137,7 +111,7 @@ func (g *Git) IsMerging(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	_, err = os.Stat(filepath.Join(gitDir, "MERGE_HEAD"))
+	_, err = os.Stat(g.fs.Join(gitDir, "MERGE_HEAD"))
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -157,7 +131,7 @@ func (g *Git) MergeBase(ctx context.Context, rev1, rev2 string) (Hash, error) {
 	if err := validateRev(rev2); err != nil {
 		return Hash{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "merge-base", rev1, rev2})
+	out, err := g.output(ctx, errPrefix, []string{"merge-base", rev1, rev2})
 	if err != nil {
 		return Hash{}, err
 	}
@@ -178,14 +152,12 @@ func (g *Git) IsAncestor(ctx context.Context, rev1, rev2 string) (bool, error) {
 	if err := validateRev(rev2); err != nil {
 		return false, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	c := g.command(ctx, []string{g.exe, "merge-base", "--is-ancestor", rev1, rev2})
-	stderr := new(bytes.Buffer)
-	c.Stderr = stderr
-	if err := sigterm.Run(ctx, c); err != nil {
-		if err, ok := err.(*exec.ExitError); ok && exitStatus(err.ProcessState) == 1 {
+	err := g.run(ctx, errPrefix, []string{"merge-base", "--is-ancestor", rev1, rev2})
+	if err != nil {
+		if exitCode(err) == 1 {
 			return false, nil
 		}
-		return false, commandError(errPrefix, err, stderr.Bytes())
+		return false, err
 	}
 	return true, nil
 }
@@ -252,7 +224,7 @@ func (g *Git) ListTree(ctx context.Context, rev string, opts ListTreeOptions) (m
 	if err := validateRev(rev); err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	args := []string{g.exe, "ls-tree", "-z"}
+	args := []string{"ls-tree", "-z"}
 	if opts.Recursive {
 		args = append(args, "-r")
 	}
@@ -371,16 +343,13 @@ func (g *Git) Cat(ctx context.Context, rev string, path TopPath) (io.ReadCloser,
 	if strings.HasPrefix(string(path), "./") || strings.HasPrefix(string(path), "../") {
 		return nil, fmt.Errorf("%s: path is relative", errPrefix)
 	}
-	c := g.command(ctx, []string{g.exe, "cat-file", "blob", rev + ":" + path.String()})
-	stdout, err := c.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", errPrefix, err)
-	}
 	stderr := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: stderr, n: 4096}
-	wait, err := sigterm.Start(ctx, c)
+	stdout, err := StartPipe(ctx, g.runner, &Invocation{
+		Args:   []string{"cat-file", "blob", rev + ":" + path.String()},
+		Dir:    g.dir,
+		Stderr: &limitWriter{w: stderr, n: errorOutputLimit},
+	})
 	if err != nil {
-		stdout.Close()
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 
@@ -390,10 +359,10 @@ func (g *Git) Cat(ctx context.Context, rev string, path TopPath) (io.ReadCloser,
 	readLen, readErr := io.ReadAtLeast(stdout, first, 1)
 	if readErr != nil {
 		// Empty stdout, check for error.
-		if err := wait(); err != nil {
+		if err := stdout.Close(); err != nil {
 			return nil, commandError(errPrefix, err, stderr.Bytes())
 		}
-		if readErr != io.EOF {
+		if !errors.Is(readErr, io.EOF) {
 			return nil, commandError(errPrefix, readErr, stderr.Bytes())
 		}
 		return nopReader{}, nil
@@ -402,7 +371,6 @@ func (g *Git) Cat(ctx context.Context, rev string, path TopPath) (io.ReadCloser,
 		errPrefix: errPrefix,
 		first:     first[:readLen],
 		pipe:      stdout,
-		wait:      wait,
 		stderr:    stderr,
 	}, nil
 }
@@ -411,7 +379,6 @@ type catReader struct {
 	errPrefix string
 	first     []byte
 	pipe      io.ReadCloser
-	wait      func() error
 	stderr    *bytes.Buffer // can't be read until wait returns
 }
 
@@ -425,13 +392,9 @@ func (cr *catReader) Read(p []byte) (int, error) {
 }
 
 func (cr *catReader) Close() error {
-	closeErr := cr.pipe.Close()
-	waitErr := cr.wait()
-	if waitErr != nil {
-		return commandError("close "+cr.errPrefix, waitErr, cr.stderr.Bytes())
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close %s: %w", cr.errPrefix, closeErr)
+	err := cr.pipe.Close()
+	if err != nil {
+		return commandError("close "+cr.errPrefix, err, cr.stderr.Bytes())
 	}
 	return nil
 }
@@ -440,23 +403,18 @@ func (cr *catReader) Close() error {
 // interpreted relative to the Git process's working directory. If any of the
 // repository's parent directories don't exist, they will be created.
 func (g *Git) Init(ctx context.Context, dir string) error {
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(g.dir, dir)
-	}
-	dirInfo, dirErr := os.Stat(filepath.Join(dir, ".git"))
-	dirExists := dirErr == nil && dirInfo.IsDir()
+	errPrefix := fmt.Sprintf("git init %q", dir)
+	_, err := g.fs.EvalSymlinks(g.fs.Join(g.abs(dir), ".git"))
+	dirExists := err == nil
 
-	c := g.command(ctx, []string{g.exe, "init", "--quiet", "--", dir})
-	buf := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: buf, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
-		return commandError(fmt.Sprintf("git init %q", dir), err, buf.Bytes())
+	err = g.run(ctx, errPrefix, []string{"init", "--quiet", "--", dir})
+	if err != nil {
+		return err
 	}
 
 	if !dirExists {
 		if err := g.WithDir(dir).linkToMain(ctx); err != nil {
-			return fmt.Errorf("git init %q: %w", dir, err)
+			return fmt.Errorf("%s: %w", errPrefix, err)
 		}
 	}
 	return nil
@@ -466,23 +424,18 @@ func (g *Git) Init(ctx context.Context, dir string) error {
 // paths are interpreted relative to the Git process's working directory. If any
 // of the repository's parent directories don't exist, they will be created.
 func (g *Git) InitBare(ctx context.Context, dir string) error {
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(g.dir, dir)
-	}
-	headInfo, headErr := os.Stat(filepath.Join(dir, "HEAD"))
-	headExists := headErr == nil && headInfo.Mode().IsRegular()
+	errPrefix := fmt.Sprintf("git init %q", dir)
+	_, err := g.fs.EvalSymlinks(g.fs.Join(g.abs(dir), "HEAD"))
+	headExists := err == nil
 
-	c := g.command(ctx, []string{g.exe, "init", "--quiet", "--bare", "--", dir})
-	buf := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: buf, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
-		return commandError(fmt.Sprintf("git init %q", dir), err, buf.Bytes())
+	err = g.run(ctx, errPrefix, []string{"init", "--quiet", "--bare", "--", dir})
+	if err != nil {
+		return err
 	}
 
 	if !headExists {
 		if err := g.WithDir(dir).linkToMain(ctx); err != nil {
-			return fmt.Errorf("git init %q: %w", dir, err)
+			return fmt.Errorf("%s: %w", errPrefix, err)
 		}
 	}
 	return nil
@@ -490,7 +443,7 @@ func (g *Git) InitBare(ctx context.Context, dir string) error {
 
 func (g *Git) linkToMain(ctx context.Context) error {
 	const errPrefix = "git symbolic-ref HEAD refs/heads/main"
-	return g.run(ctx, errPrefix, []string{g.exe, "symbolic-ref", "HEAD", "refs/heads/main"})
+	return g.run(ctx, errPrefix, []string{"symbolic-ref", "HEAD", "refs/heads/main"})
 }
 
 // AddOptions specifies the command-line options for `git add`.
@@ -505,9 +458,12 @@ type AddOptions struct {
 	IntentToAdd bool
 }
 
-// Add adds file contents to the index.
+// Add adds file contents to the index. If len(pathspecs) == 0, then Add returns nil.
 func (g *Git) Add(ctx context.Context, pathspecs []Pathspec, opts AddOptions) error {
-	args := []string{g.exe, "add"}
+	if len(pathspecs) == 0 {
+		return nil
+	}
+	args := []string{"add"}
 	if opts.IncludeIgnored {
 		args = append(args, "-f")
 	}
@@ -518,20 +474,13 @@ func (g *Git) Add(ctx context.Context, pathspecs []Pathspec, opts AddOptions) er
 	for _, p := range pathspecs {
 		args = append(args, p.String())
 	}
-	c := g.command(ctx, args)
-	buf := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: buf, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
-		return commandError("git add", err, buf.Bytes())
-	}
-	return nil
+	return g.run(ctx, "git add", args)
 }
 
 // StageTracked updates the index to match the tracked files in the
 // working copy.
 func (g *Git) StageTracked(ctx context.Context) error {
-	return g.run(ctx, "git add -u", []string{g.exe, "add", "--update"})
+	return g.run(ctx, "git add -u", []string{"add", "--update"})
 }
 
 // RemoveOptions specifies the command-line options for `git add`.
@@ -551,7 +500,7 @@ func (g *Git) Remove(ctx context.Context, pathspecs []Pathspec, opts RemoveOptio
 	if len(pathspecs) == 0 {
 		return nil
 	}
-	args := []string{g.exe, "rm", "--quiet"}
+	args := []string{"rm", "--quiet"}
 	if opts.Recursive {
 		args = append(args, "-r")
 	}
@@ -565,14 +514,7 @@ func (g *Git) Remove(ctx context.Context, pathspecs []Pathspec, opts RemoveOptio
 	for _, p := range pathspecs {
 		args = append(args, p.String())
 	}
-	c := g.command(ctx, args)
-	buf := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: buf, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
-		return commandError("git rm", err, buf.Bytes())
-	}
-	return nil
+	return g.run(ctx, "git rm", args)
 }
 
 // CommitOptions overrides the default metadata for a commit. Any fields
@@ -609,13 +551,17 @@ func (opts CommitOptions) addToEnv(env []string) []string {
 // Commit creates a new commit on HEAD with the staged content.
 // The message will be used exactly as given.
 func (g *Git) Commit(ctx context.Context, message string, opts CommitOptions) error {
-	c := g.command(ctx, []string{g.exe, "commit", "--quiet", "--file=-", "--cleanup=verbatim"})
-	c.Env = opts.addToEnv(c.Env) // c.Env == g.env; len(g.env) == cap(g.env)
-	c.Stdin = strings.NewReader(message)
 	out := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: out, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: out, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim"},
+		Dir:    g.dir,
+		Env:    opts.addToEnv(nil),
+		Stdin:  strings.NewReader(message),
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError("git commit", err, out.Bytes())
 	}
 	return nil
@@ -624,13 +570,17 @@ func (g *Git) Commit(ctx context.Context, message string, opts CommitOptions) er
 // CommitAll creates a new commit on HEAD with all of the tracked files.
 // The message will be used exactly as given.
 func (g *Git) CommitAll(ctx context.Context, message string, opts CommitOptions) error {
-	c := g.command(ctx, []string{g.exe, "commit", "--quiet", "--file=-", "--cleanup=verbatim", "--all"})
-	c.Env = opts.addToEnv(c.Env) // c.Env == g.env; len(g.env) == cap(g.env)
-	c.Stdin = strings.NewReader(message)
 	out := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: out, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: out, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim", "--all"},
+		Dir:    g.dir,
+		Env:    opts.addToEnv(nil),
+		Stdin:  strings.NewReader(message),
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError("git commit", err, out.Bytes())
 	}
 	return nil
@@ -659,26 +609,30 @@ func (g *Git) CommitFiles(ctx context.Context, message string, pathspecs []Paths
 			pathspecs = append([]Pathspec(nil), pathspecs...)
 			for i := range pathspecs {
 				magic, pat := pathspecs[i].SplitMagic()
-				if magic.Top || filepath.IsAbs(pat) {
+				if magic.Top || g.fs.IsAbs(pat) {
 					// Top-level or absolute paths need no rewrite.
 					continue
 				}
-				pathspecs[i] = JoinPathspecMagic(magic, filepath.Join(prefix, pat))
+				pathspecs[i] = JoinPathspecMagic(magic, g.fs.Join(prefix, pat))
 			}
 		}
 	}
-	args := []string{g.exe, "commit", "--quiet", "--file=-", "--cleanup=verbatim", "--only", "--allow-empty", "--"}
+	args := []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim", "--only", "--allow-empty", "--"}
 	for _, spec := range pathspecs {
 		args = append(args, spec.String())
 	}
-	c := g.command(ctx, args)
-	c.Env = opts.addToEnv(c.Env) // c.Env == g.env; len(g.env) == cap(g.env)
-	c.Stdin = strings.NewReader(message)
 	out := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: out, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
-		return commandError(errPrefix, err, out.Bytes())
+	w := &limitWriter{w: out, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Env:    opts.addToEnv(nil),
+		Stdin:  strings.NewReader(message),
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
+		return commandError("git commit", err, out.Bytes())
 	}
 	return nil
 }
@@ -750,20 +704,23 @@ func (g *Git) Amend(ctx context.Context, opts AmendOptions) error {
 		}
 		msg = info.Message
 	}
-	c := g.command(ctx, opts.addAuthorToArgs([]string{
-		g.exe,
-		"commit",
-		"--amend",
-		"--quiet",
-		"--file=-",
-		"--cleanup=verbatim",
-	}))
-	c.Env = opts.addToEnv(c.Env) // c.Env == g.env; len(g.env) == cap(g.env)
-	c.Stdin = strings.NewReader(msg)
 	out := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: out, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: out, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args: opts.addAuthorToArgs([]string{
+			"commit",
+			"--amend",
+			"--quiet",
+			"--file=-",
+			"--cleanup=verbatim",
+		}),
+		Dir:    g.dir,
+		Env:    opts.addToEnv(nil),
+		Stdin:  strings.NewReader(msg),
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError(errPrefix, err, out.Bytes())
 	}
 	return nil
@@ -784,21 +741,24 @@ func (g *Git) AmendAll(ctx context.Context, opts AmendOptions) error {
 		}
 		msg = info.Message
 	}
-	c := g.command(ctx, opts.addAuthorToArgs([]string{
-		g.exe,
-		"commit",
-		"--amend",
-		"--all",
-		"--quiet",
-		"--file=-",
-		"--cleanup=verbatim",
-	}))
-	c.Env = opts.addToEnv(c.Env) // c.Env == g.env; len(g.env) == cap(g.env)
-	c.Stdin = strings.NewReader(msg)
 	out := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: out, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: out, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args: opts.addAuthorToArgs([]string{
+			"commit",
+			"--amend",
+			"--all",
+			"--quiet",
+			"--file=-",
+			"--cleanup=verbatim",
+		}),
+		Dir:    g.dir,
+		Env:    opts.addToEnv(nil),
+		Stdin:  strings.NewReader(msg),
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError(errPrefix, err, out.Bytes())
 	}
 	return nil
@@ -841,16 +801,15 @@ func (g *Git) AmendFiles(ctx context.Context, pathspecs []Pathspec, opts AmendOp
 			pathspecs = append([]Pathspec(nil), pathspecs...)
 			for i := range pathspecs {
 				magic, pat := pathspecs[i].SplitMagic()
-				if magic.Top || filepath.IsAbs(pat) {
+				if magic.Top || g.fs.IsAbs(pat) {
 					// Top-level or absolute paths need no rewrite.
 					continue
 				}
-				pathspecs[i] = JoinPathspecMagic(magic, filepath.Join(prefix, pat))
+				pathspecs[i] = JoinPathspecMagic(magic, g.fs.Join(prefix, pat))
 			}
 		}
 	}
 	args := opts.addAuthorToArgs([]string{
-		g.exe,
 		"commit",
 		"--amend",
 		"--only",
@@ -864,13 +823,17 @@ func (g *Git) AmendFiles(ctx context.Context, pathspecs []Pathspec, opts AmendOp
 			args = append(args, p.String())
 		}
 	}
-	c := g.command(ctx, args)
-	c.Env = opts.addToEnv(c.Env) // c.Env == g.env; len(g.env) == cap(g.env)
-	c.Stdin = strings.NewReader(msg)
 	out := new(bytes.Buffer)
-	c.Stdout = &limitWriter{w: out, n: 4096}
-	c.Stderr = c.Stdout
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: out, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Env:    opts.addToEnv(nil),
+		Stdin:  strings.NewReader(msg),
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError(errPrefix, err, out.Bytes())
 	}
 	return nil
@@ -897,7 +860,7 @@ func (g *Git) Merge(ctx context.Context, revs []string) error {
 	if len(revs) == 1 {
 		errPrefix += " " + revs[0]
 	}
-	args := []string{g.exe, "merge", "--quiet", "--no-commit", "--no-ff"}
+	args := []string{"merge", "--quiet", "--no-commit", "--no-ff"}
 	args = append(args, revs...)
 	return g.run(ctx, errPrefix, args)
 }
@@ -905,7 +868,7 @@ func (g *Git) Merge(ctx context.Context, revs []string) error {
 // AbortMerge aborts the current conflict resolution process and tries
 // to reconstruct pre-merge state.
 func (g *Git) AbortMerge(ctx context.Context) error {
-	return g.run(ctx, "git abort merge", []string{g.exe, "merge", "--abort"})
+	return g.run(ctx, "git abort merge", []string{"merge", "--abort"})
 }
 
 // CheckoutOptions specifies the command-line options for `git checkout`.
@@ -960,12 +923,12 @@ func (g *Git) CheckoutBranch(ctx context.Context, branch string, opts CheckoutOp
 	// Verify that the branch exists. `git checkout` will attempt to
 	// create branches if they don't exist if there's a remote tracking
 	// branch of the same name.
-	if err := g.run(ctx, errPrefix, []string{g.exe, "rev-parse", "-q", "--verify", "--revs-only", BranchRef(branch).String()}); err != nil {
+	if err := g.run(ctx, errPrefix, []string{"rev-parse", "-q", "--verify", "--revs-only", BranchRef(branch).String()}); err != nil {
 		return err
 	}
 
 	// Run checkout with branch name.
-	args := []string{g.exe, "checkout", "--quiet"}
+	args := []string{"checkout", "--quiet"}
 	switch opts.ConflictBehavior {
 	case MergeLocal:
 		args = append(args, "--merge")
@@ -989,7 +952,7 @@ func (g *Git) CheckoutRev(ctx context.Context, rev string, opts CheckoutOptions)
 	}
 
 	// Run checkout with the revision.
-	args := []string{g.exe, "checkout", "--quiet", "--detach"}
+	args := []string{"checkout", "--quiet", "--detach"}
 	switch opts.ConflictBehavior {
 	case MergeLocal:
 		args = append(args, "--merge")
@@ -1031,7 +994,7 @@ func (g *Git) NewBranch(ctx context.Context, name string, opts BranchOptions) er
 			return fmt.Errorf("%s: %w", errPrefix, err)
 		}
 	}
-	args := []string{g.exe}
+	var args []string
 	if opts.Checkout {
 		args = append(args, "checkout", "--quiet")
 		if opts.Track {
@@ -1069,7 +1032,7 @@ func (g *Git) NewBranch(ctx context.Context, name string, opts BranchOptions) er
 // repository. This is sometimes useful as a diff comparison target.
 func (g *Git) NullTreeHash(ctx context.Context) (Hash, error) {
 	const errPrefix = "git hash-object"
-	out, err := g.output(ctx, errPrefix, []string{g.exe, "hash-object", "-t", "tree", "--stdin"})
+	out, err := g.output(ctx, errPrefix, []string{"hash-object", "-t", "tree", "--stdin"})
 	if err != nil {
 		return Hash{}, err
 	}
@@ -1087,14 +1050,33 @@ func commandError(prefix string, runError error, stderr []byte) error {
 	if len(stderr) == 0 {
 		return fmt.Errorf("%s: %w", prefix, runError)
 	}
-	if _, isExit := runError.(*exec.ExitError); isExit {
+	if exitCode(runError) != -1 {
 		if bytes.IndexByte(stderr, '\n') == -1 {
 			// Collapse into single line.
-			return fmt.Errorf("%s: %s", prefix, stderr)
+			return &formattedError{
+				msg:   fmt.Sprintf("%s: %s", prefix, stderr),
+				cause: runError,
+			}
 		}
-		return fmt.Errorf("%s:\n%s", prefix, stderr)
+		return &formattedError{
+			msg:   fmt.Sprintf("%s:\n%s", prefix, stderr),
+			cause: runError,
+		}
 	}
 	return fmt.Errorf("%s: %w\n%s", prefix, runError, stderr)
+}
+
+type formattedError struct {
+	msg   string
+	cause error
+}
+
+func (e *formattedError) Error() string {
+	return e.msg
+}
+
+func (e *formattedError) Unwrap() error {
+	return e.cause
 }
 
 func validateRev(rev string) error {

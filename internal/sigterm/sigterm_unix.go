@@ -22,8 +22,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var signals = []os.Signal{unix.SIGTERM, unix.SIGINT}
-
 func terminate(proc *os.Process) error {
 	return proc.Signal(unix.SIGTERM)
 }

@@ -43,6 +43,11 @@ func TestInit(t *testing.T) {
 	if !info.IsDir() {
 		t.Errorf("%s is not a directory", gitDirPath)
 	}
+	if got, err := env.g.HeadRef(ctx); err != nil {
+		t.Error(err)
+	} else if want := BranchRef("main"); got != want {
+		t.Errorf("HEAD = %q; want %q", got, want)
+	}
 }
 
 func TestInitBare(t *testing.T) {
@@ -64,5 +69,10 @@ func TestInitBare(t *testing.T) {
 		t.Error(err)
 	} else if !exists {
 		t.Error("HEAD file does not exist")
+	}
+	if got, err := env.g.HeadRef(ctx); err != nil {
+		t.Error(err)
+	} else if want := BranchRef("main"); got != want {
+		t.Errorf("HEAD = %q; want %q", got, want)
 	}
 }

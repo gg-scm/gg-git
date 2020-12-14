@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
@@ -62,10 +63,17 @@ func TestListTree(t *testing.T) {
 	if err := env.g.Run(ctx, "commit", "-m", "commit 1"); err != nil {
 		t.Fatal(err)
 	}
+	symlinkOp := filesystem.Symlink("foo.txt", "mylink")
+	if runtime.GOOS == "windows" {
+		symlinkOp = filesystem.Write("mylink", "")
+	}
 	err = env.root.Apply(
 		filesystem.Write("bar/baz.txt", dummyContent),
-		filesystem.Symlink("foo.txt", "mylink"),
+		symlinkOp,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	baz := &TreeEntry{
 		path:   "bar/baz.txt",
 		typ:    "blob",
@@ -87,8 +95,14 @@ func TestListTree(t *testing.T) {
 		object: gitObjectHash("blob", []byte("foo.txt")),
 		size:   int64(len("foo.txt")),
 	}
-	if err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		mylink = &TreeEntry{
+			path:   "mylink",
+			typ:    "blob",
+			mode:   0644,
+			object: gitObjectHash("blob", nil),
+			size:   0,
+		}
 	}
 	if err := env.g.Run(ctx, "add", filepath.Join("bar", "baz.txt"), "mylink"); err != nil {
 		t.Fatal(err)
@@ -104,6 +118,9 @@ func TestListTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	submodHead, err := submodGit.Head(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	submod := &TreeEntry{
 		path:   "submod",
 		typ:    "commit",

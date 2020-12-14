@@ -27,7 +27,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestCommand(t *testing.T) {
+var _ Piper = new(Local)
+
+func TestLocalCommand(t *testing.T) {
 	gitPath, err := findGit()
 	if err != nil {
 		t.Skip("git not found:", err)
@@ -40,7 +42,7 @@ func TestCommand(t *testing.T) {
 		{
 			name:    "NilEnv",
 			env:     nil,
-			wantEnv: []string{},
+			wantEnv: os.Environ(),
 		},
 		{
 			name:    "EmptyEnv",
@@ -70,9 +72,8 @@ func TestCommand(t *testing.T) {
 			if test.env != nil {
 				env = append([]string{}, test.env...)
 			}
-			git, err := New(Options{
+			l, err := NewLocal(Options{
 				GitExe: gitPath,
-				Dir:    dir,
 				Env:    env,
 				LogHook: func(_ context.Context, args []string) {
 					hookArgs = append([]string(nil), args...)
@@ -81,7 +82,13 @@ func TestCommand(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := git.Command(ctx, "commit", "-m", "Hello, World!")
+			c, err := l.command(ctx, &Invocation{
+				Dir:  dir,
+				Args: []string{"commit", "-m", "Hello, World!"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if c.Path != gitPath {
 				t.Errorf("c.Path = %q; want %q", c.Path, gitPath)
 			}
@@ -151,6 +158,59 @@ func TestOutput(t *testing.T) {
 	out, err := env.g.Output(ctx, "config", "core.bare")
 	if out != "false\n" || err != nil {
 		t.Errorf("Output(ctx, \"config\", \"core.bare\") = %q, %v; want \"false\\n\", <nil>", out, err)
+	}
+}
+
+func TestIndexCommand(t *testing.T) {
+	tests := []struct {
+		args []string
+		want int
+	}{
+		{
+			args: nil,
+			want: 0,
+		},
+		{
+			args: []string{"diff"},
+			want: 0,
+		},
+		{
+			args: []string{"diff", "-p"},
+			want: 0,
+		},
+		{
+			args: []string{"-p", "diff", "-p"},
+			want: 1,
+		},
+		{
+			args: []string{"-C", "foo", "diff", "-p"},
+			want: 2,
+		},
+		{
+			args: []string{"-pC", "foo", "diff", "-p"},
+			want: 2,
+		},
+		{
+			args: []string{"--work-tree", "foo"},
+			want: 2,
+		},
+		{
+			args: []string{"--work-tree=foo", "foo"},
+			want: 1,
+		},
+		{
+			args: []string{"--work-treex", "foo"},
+			want: 1,
+		},
+		{
+			args: []string{"--work-treex", "foo", "bar"},
+			want: 1,
+		},
+	}
+	for _, test := range tests {
+		if got := indexCommand(test.args); got != test.want {
+			t.Errorf("indexCommand(%q) = %d; want %d", test.args, got, test.want)
+		}
 	}
 }
 

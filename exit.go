@@ -12,22 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//+build darwin dragonfly freebsd linux netbsd openbsd plan9 solaris windows
-
 package git
 
-import (
-	"os"
-	"syscall"
-)
+import "errors"
 
-func exitStatus(state *os.ProcessState) int {
-	ws, ok := state.Sys().(syscall.WaitStatus)
-	if !ok {
-		if !state.Success() {
-			return -1
-		}
-		return 0
+// exitCode returns the exit code indicated by the error, or -1 if the error
+// doesn't indicate an exited process.
+func exitCode(err error) int {
+	var coder interface {
+		ExitCode() int
 	}
-	return ws.ExitStatus()
+	if !errors.As(err, &coder) {
+		return -1
+	}
+	return coder.ExitCode()
 }

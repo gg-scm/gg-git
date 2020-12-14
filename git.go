@@ -32,106 +32,63 @@ import (
 )
 
 // Git is a context for performing Git version control operations.
-// Broadly, it consists of a path to an installed copy of Git and a
-// working directory path.
 type Git struct {
-	exe string
-	dir string
-	env []string // cap(env) == len(env), guaranteed by New.
-	log func(context.Context, []string)
+	dir    string
+	runner Runner
+	fs     FileSystem
 
 	versionMu   sync.Mutex
 	versionCond chan struct{}
 	version     string
 }
 
-// Options holds the parameters for New.
-type Options struct {
-	// Dir is the working directory to run the Git subprocess from.
-	// If empty, uses this process's working directory.
-	Dir string
-
-	// Env specifies the environment of the subprocess.
-	// If Env == nil, then the process's environment will be used.
-	// If len(Env) == 0, then no environment variables will be set.
-	Env []string
-
-	// GitExe is the name of or a path to a Git executable.
-	// It is treated in the same manner as the argument to exec.LookPath.
-	// An empty string is treated the same as "git".
-	GitExe string
-
-	// LogHook is a function that will be called at the start of every Git
-	// subprocess.
-	LogHook func(ctx context.Context, args []string)
-}
-
-// New creates a new Git context.
+// New creates a new Git context that communicates with a local Git subprocess.
+// It is equivalent to passing the result of NewLocal to Custom.
 func New(opts Options) (*Git, error) {
-	var err error
-	g := &Git{
-		log: opts.LogHook,
+	l, err := NewLocal(opts)
+	if err != nil {
+		return nil, err
 	}
-
 	if opts.Dir == "" {
-		g.dir, err = os.Getwd()
+		dir, err := os.Getwd()
 		if err != nil {
 			return nil, fmt.Errorf("init git: %w", err)
 		}
-		g.dir = filepath.Clean(g.dir)
-	} else {
-		g.dir, err = filepath.Abs(opts.Dir)
-		if err != nil {
-			return nil, fmt.Errorf("init git: %w", err)
-		}
+		return Custom(dir, l, l), nil
 	}
-
-	if opts.Env != nil {
-		// Using make because append doesn't guarantee capacity.
-		g.env = make([]string, len(opts.Env))
-		copy(g.env, opts.Env)
-	}
-
-	if opts.GitExe == "" {
-		opts.GitExe = "git"
-	}
-	g.exe, err = exec.LookPath(opts.GitExe)
+	dir, err := filepath.Abs(opts.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("init git: %w", err)
 	}
-	g.exe, err = filepath.Abs(g.exe)
-	if err != nil {
-		return nil, fmt.Errorf("init git: %w", err)
-	}
-
-	return g, nil
+	return Custom(dir, l, l), nil
 }
 
-// Command creates a new *exec.Cmd that will invoke Git with the given
-// arguments. The returned command does not obey the given Context's deadline
-// or cancelation.
-func (g *Git) Command(ctx context.Context, args ...string) *exec.Cmd {
-	c := g.command(ctx, append([]string{g.exe}, args...))
-	c.Env = append([]string{}, c.Env...) // Defensive copy.
-	return c
+// Custom creates a new Git context from the given Runner and FileSystem.
+// It panics if the Runner is nil, the FileSystem is nil, or dir is not absolute.
+// If the Runner also implements Piper, then its GitPipe method will be used for
+// any large streaming operations.
+func Custom(dir string, s Runner, fs FileSystem) *Git {
+	if s == nil || fs == nil {
+		panic("git.Custom called with nil interfaces")
+	}
+	if !fs.IsAbs(dir) {
+		panic("git.Custom called with relative path: " + dir)
+	}
+	return &Git{
+		dir:    fs.Clean(dir),
+		runner: s,
+		fs:     fs,
+	}
 }
 
-// command returns a new *exec.Cmd for the given arguments, whose first
-// element must be g.exe. g.env will be used directly, so make a copy if
-// the return value is going to be exposed (usually just in Command).
-func (g *Git) command(ctx context.Context, argv []string) *exec.Cmd {
-	if g.log != nil {
-		g.log(ctx, argv[1:])
-	}
-	if len(argv) == 0 || argv[0] != g.exe {
-		panic("argv[0] != g.exe")
-	}
-	return &exec.Cmd{
-		Path: g.exe,
-		Args: argv,
-		Env:  g.env,
-		Dir:  g.dir,
-	}
+// Runner returns the context's Git runner.
+func (g *Git) Runner() Runner {
+	return g.runner
+}
+
+// FileSystem returns the context's filesystem.
+func (g *Git) FileSystem() FileSystem {
+	return g.fs
 }
 
 func (g *Git) getVersion(ctx context.Context) (string, error) {
@@ -156,7 +113,7 @@ func (g *Git) getVersion(ctx context.Context) (string, error) {
 	g.versionMu.Unlock()
 
 	// Run git --version.
-	v, err := g.output(ctx, "git --version", []string{g.exe, "--version"})
+	v, err := g.output(ctx, "git --version", []string{"--version"})
 	g.versionMu.Lock()
 	close(g.versionCond)
 	g.versionCond = nil
@@ -170,24 +127,24 @@ func (g *Git) getVersion(ctx context.Context) (string, error) {
 }
 
 // Exe returns the absolute path to the Git executable.
+// This method will panic if g's Runner is not of type *Local.
+//
+// Deprecated: Call *Local.Exe() before calling Custom.
 func (g *Git) Exe() string {
-	return g.exe
+	return g.runner.(*Local).Exe()
 }
 
 // WithDir returns a new instance that is changed to use dir as its working directory.
 // Any relative paths will be interpreted relative to g's working directory.
 func (g *Git) WithDir(dir string) *Git {
-	if filepath.IsAbs(dir) {
-		dir = filepath.Clean(dir)
-	} else {
-		dir = filepath.Join(g.dir, dir)
+	return Custom(g.abs(dir), g.runner, g.fs)
+}
+
+func (g *Git) abs(path string) string {
+	if !g.fs.IsAbs(path) {
+		return g.fs.Join(g.dir, path)
 	}
-	return &Git{
-		exe: g.exe,
-		dir: dir,
-		env: g.env,
-		log: g.log,
-	}
+	return g.fs.Clean(path)
 }
 
 const (
@@ -198,19 +155,22 @@ const (
 // Run runs Git with the given arguments. If an error occurs, the
 // combined stdout and stderr will be returned in the error.
 func (g *Git) Run(ctx context.Context, args ...string) error {
-	return g.run(ctx, errorSubject(args), append([]string{g.exe}, args...))
+	return g.run(ctx, errorSubject(args), args)
 }
 
 // run runs the specified Git subcommand.  If an error occurs, the
-// combined stdout and stderr will be returned in the error. argv is
-// interpreted the same as in command(). run will use the given error
-// prefix instead of one derived from the arguments.
-func (g *Git) run(ctx context.Context, errPrefix string, argv []string) error {
-	c := g.command(ctx, argv)
+// combined stdout and stderr will be returned in the error. run will use the
+// given error prefix instead of one derived from the arguments.
+func (g *Git) run(ctx context.Context, errPrefix string, args []string) error {
 	output := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: output, n: errorOutputLimit}
-	c.Stdout = c.Stderr
-	if err := sigterm.Run(ctx, c); err != nil {
+	w := &limitWriter{w: output, n: errorOutputLimit}
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Stdout: w,
+		Stderr: w,
+	})
+	if err != nil {
 		return commandError(errPrefix, err, output.Bytes())
 	}
 	return nil
@@ -218,22 +178,273 @@ func (g *Git) run(ctx context.Context, errPrefix string, argv []string) error {
 
 // Output runs Git with the given arguments and returns its stdout.
 func (g *Git) Output(ctx context.Context, args ...string) (string, error) {
-	return g.output(ctx, errorSubject(args), append([]string{g.exe}, args...))
+	return g.output(ctx, errorSubject(args), args)
 }
 
 // output runs the specified Git subcommand, returning its stdout.
-// argv is interpreted the same as in command().
 // output will use the given error prefix instead of one derived from the arguments.
-func (g *Git) output(ctx context.Context, errPrefix string, argv []string) (string, error) {
-	c := g.command(ctx, argv)
+func (g *Git) output(ctx context.Context, errPrefix string, args []string) (string, error) {
 	stdout := new(strings.Builder)
-	c.Stdout = &limitWriter{w: stdout, n: dataOutputLimit}
 	stderr := new(bytes.Buffer)
-	c.Stderr = &limitWriter{w: stderr, n: errorOutputLimit}
-	if err := sigterm.Run(ctx, c); err != nil {
+	err := g.runner.RunGit(ctx, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Stdout: &limitWriter{w: stdout, n: dataOutputLimit},
+		Stderr: &limitWriter{w: stderr, n: errorOutputLimit},
+	})
+	if err != nil {
 		return stdout.String(), commandError(errPrefix, err, stderr.Bytes())
 	}
 	return stdout.String(), nil
+}
+
+// A FileSystem manipulates paths for a possibly remote filesystem.
+// The methods of a FileSystem must be safe to call concurrently.
+type FileSystem interface {
+	// Join joins any number of path elements into a single path.
+	// Empty elements are ignored. The result must be Cleaned.
+	// However, if the argument list is empty or all its elements are
+	// empty, Join returns an empty string.
+	Join(elem ...string) string
+
+	// Clean returns the shortest path name equivalent to path by purely
+	// lexical processing.
+	Clean(path string) string
+
+	// IsAbs reports whether the path is absolute.
+	IsAbs(path string) bool
+
+	// EvalSymlinks returns the path name after the evaluation of any
+	// symbolic links. The path argument will always be absolute.
+	EvalSymlinks(path string) (string, error)
+}
+
+// A Runner executes Git processes.
+//
+// RunGit starts a Git process with the given parameters and waits until
+// the process is finished. It must not modify the Invocation.
+// RunGit must be safe to call concurrently with other calls to RunGit.
+//
+// If the Git process exited with a non-zero exit code, there should
+// be an error in its Unwrap chain that has an `ExitCode() int` method.
+type Runner interface {
+	RunGit(ctx context.Context, invoke *Invocation) error
+}
+
+// A Piper is an optional interface that a Runner can implement for
+// more efficient streaming of long-running outputs.
+//
+// PipeGit starts a Git process with its standard output connected to a
+// pipe. It ignores the Stdout field of the Invocation. PipeGit must be
+// safe to call concurrently with other calls to PipeGit and RunGit.
+//
+// The returned pipe's Close method closes the pipe and then waits for
+// the Git process to finish before returning. It is the caller's
+// responsibility to call the Close method.
+type Piper interface {
+	Runner
+	PipeGit(ctx context.Context, invoke *Invocation) (pipe io.ReadCloser, err error)
+}
+
+// Invocation holds the parameters for a Git process.
+type Invocation struct {
+	// Args is the list of arguments to Git. It does not include a leading "git"
+	// argument.
+	Args []string
+
+	// Dir is an absolute directory. It's the only required field in the struct.
+	Dir string
+
+	// Env specifies additional environment variables to the Git process.
+	// Each entry is of the form "key=value".
+	// If Env contains duplicate environment keys, only the last
+	// value in the slice for each duplicate key is used.
+	// The Runner may send additional environment variables to the
+	// Git process.
+	Env []string
+
+	// Stdin specifies the Git process's standard input.
+	//
+	// If Stdin is nil, the process reads from the null device.
+	//
+	// The io.Closer returned from the Runner must not return until the
+	// end of Stdin is reached (any read error).
+	Stdin io.Reader
+
+	// Stdout and Stderr specify the Git process's standard output and error.
+	//
+	// If either is nil, Run connects the corresponding file descriptor
+	// to the null device.
+	//
+	// The io.Closer returned from the Runner must not return until the
+	// all the data is written to the respective Writers.
+	//
+	// If Stdout and Stderr are the same writer, and have a type that can
+	// be compared with ==, at most one goroutine at a time will call Write.
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// StartPipe starts a piped Git command on r. If r implements Piper, then
+// r.PipeGit is used. Otherwise, StartPipe uses a fallback implementation
+// that calls r.RunGit. invoke.Stdout is ignored.
+func StartPipe(ctx context.Context, s Runner, invoke *Invocation) (io.ReadCloser, error) {
+	if ps, ok := s.(Piper); ok {
+		return ps.PipeGit(ctx, invoke)
+	}
+	return startPipeFallback(ctx, s, invoke)
+}
+
+func startPipeFallback(ctx context.Context, s Runner, invoke *Invocation) (io.ReadCloser, error) {
+	pr, pw := io.Pipe()
+	invoke2 := new(Invocation)
+	*invoke2 = *invoke
+	invoke2.Stdout = pw
+	e := make(chan error, 1)
+	go func() {
+		e <- s.RunGit(ctx, invoke2)
+	}()
+	return localPipe{pr, func() error { return <-e }}, nil
+}
+
+// Options holds the parameters for New and NewLocal.
+type Options struct {
+	// Dir is the working directory to run the Git subprocess from.
+	// If empty, uses this process's working directory.
+	// NewLocal ignores this field.
+	Dir string
+
+	// Env specifies the environment of the subprocess.
+	// If Env == nil, then the process's environment will be used.
+	Env []string
+
+	// GitExe is the name of or a path to a Git executable.
+	// It is treated in the same manner as the argument to exec.LookPath.
+	// An empty string is treated the same as "git".
+	GitExe string
+
+	// LogHook is a function that will be called at the start of every Git
+	// subprocess.
+	LogHook func(ctx context.Context, args []string)
+}
+
+// Local implements Runner by starting Git subprocesses.
+type Local struct {
+	exe string
+	env []string // cap(env) == len(env), guaranteed by NewLocal.
+	log func(context.Context, []string)
+}
+
+// NewLocal returns a new local runner with the given options.
+// Dir is ignored.
+func NewLocal(opts Options) (*Local, error) {
+	var err error
+	l := &Local{
+		log: opts.LogHook,
+	}
+
+	if opts.Env == nil {
+		l.env = os.Environ()
+		l.env = l.env[:len(l.env):len(l.env)]
+	} else {
+		// Using make because append doesn't guarantee capacity.
+		l.env = make([]string, len(opts.Env))
+		copy(l.env, opts.Env)
+	}
+
+	if opts.GitExe == "" {
+		opts.GitExe = "git"
+	}
+	l.exe, err = exec.LookPath(opts.GitExe)
+	if err != nil {
+		return nil, fmt.Errorf("init git: %w", err)
+	}
+	l.exe, err = filepath.Abs(l.exe)
+	if err != nil {
+		return nil, fmt.Errorf("init git: %w", err)
+	}
+
+	return l, nil
+}
+
+// EvalSymlinks calls path/filepath.EvalSymlinks.
+func (l *Local) EvalSymlinks(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
+}
+
+// Join calls path/filepath.Join.
+func (l *Local) Join(elem ...string) string {
+	return filepath.Join(elem...)
+}
+
+// Clean calls path/filepath.Clean.
+func (l *Local) Clean(path string) string {
+	return filepath.Clean(path)
+}
+
+// IsAbs calls path/filepath.IsAbs.
+func (l *Local) IsAbs(path string) bool {
+	return filepath.IsAbs(path)
+}
+
+// command returns a new *exec.Cmd for the given invocation.
+func (l *Local) command(ctx context.Context, invoke *Invocation) (*exec.Cmd, error) {
+	if invoke.Dir == "" {
+		return nil, fmt.Errorf("start git: directory is empty")
+	}
+	if !filepath.IsAbs(invoke.Dir) {
+		return nil, fmt.Errorf("start git: directory %s is not absolute", invoke.Dir)
+	}
+	if l.log != nil {
+		l.log(ctx, invoke.Args)
+	}
+	argv := make([]string, len(invoke.Args)+1)
+	argv[0] = l.exe
+	copy(argv[1:], invoke.Args)
+	return &exec.Cmd{
+		Path:   l.exe,
+		Args:   argv,
+		Env:    append(l.env, invoke.Env...),
+		Dir:    invoke.Dir,
+		Stdin:  invoke.Stdin,
+		Stdout: invoke.Stdout,
+		Stderr: invoke.Stderr,
+	}, nil
+}
+
+// Exe returns the absolute path to the Git executable.
+func (l *Local) Exe() string {
+	return l.exe
+}
+
+// RunGit runs Git in a subprocess. If the Context is cancelled or its
+// deadline is exceeded, RunGit will send SIGTERM to the subprocess.
+func (l *Local) RunGit(ctx context.Context, invoke *Invocation) error {
+	c, err := l.command(ctx, invoke)
+	if err != nil {
+		return err
+	}
+	return sigterm.Run(ctx, c)
+}
+
+// PipeGit starts a Git subprocess with its standard output connected to
+// an OS pipe. If the Context is cancelled or its deadline is exceeded,
+// PipeGit will send SIGTERM to the subprocess.
+func (l *Local) PipeGit(ctx context.Context, invoke *Invocation) (io.ReadCloser, error) {
+	c, err := l.command(ctx, invoke)
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("start git: %w", err)
+	}
+	wait, err := sigterm.Start(ctx, c)
+	if err != nil {
+		// stdout will be automatically closed.
+		return nil, err
+	}
+	return localPipe{stdout, wait}, nil
 }
 
 // oneLine verifies that s contains a single line delimited by '\n' and
@@ -253,12 +464,46 @@ func oneLine(s string) (string, error) {
 }
 
 func errorSubject(args []string) string {
-	for i, a := range args {
-		if !strings.HasPrefix(a, "-") && (i == 0 || args[i-1] != "-c") {
-			return "git " + a
+	i := indexCommand(args)
+	if i >= len(args) {
+		return "git"
+	}
+	return "git " + args[i]
+}
+
+// indexCommand finds the index of the first non-global-option argument in a Git
+// argument list or len(args) if no such argument could be found.
+func indexCommand(args []string) int {
+scanArgs:
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			return i
+		}
+		if !strings.HasPrefix(a, "--") {
+			// Short option. Check last character of argument.
+			if strings.IndexByte(globalShortOptionsWithArgs, a[len(a)-1]) != -1 {
+				i++
+			}
+			continue scanArgs
+		}
+		for _, opt := range globalLongOptionsWithArgs {
+			if a[2:] == opt {
+				i++
+				continue scanArgs
+			}
 		}
 	}
-	return "git"
+	return len(args)
+}
+
+var globalShortOptionsWithArgs = "cC"
+
+var globalLongOptionsWithArgs = []string{
+	"exec-path",
+	"git-dir",
+	"work-tree",
+	"namespace",
 }
 
 type limitWriter struct {
@@ -278,4 +523,19 @@ func (lw *limitWriter) Write(p []byte) (int, error) {
 	n, err := lw.w.Write(p)
 	lw.n -= int64(n)
 	return n, err
+}
+
+type localPipe struct {
+	io.ReadCloser
+	wait func() error
+}
+
+func (p localPipe) Close() error {
+	closeErr := p.ReadCloser.Close()
+	waitErr := p.wait()
+	if waitErr != nil {
+		// Wait errors are usually more interesting than close errors.
+		return waitErr
+	}
+	return closeErr
 }
