@@ -1,4 +1,10 @@
-golang-gg-scm-pkg-git (0.4.1-1~1.gbpb622ff) UNRELEASED; urgency=medium
+golang-gg-scm-pkg-git (0.7.3-1) gg; urgency=medium
+
+  * New upstream release.
+
+ -- Ross Light <ross@zombiezen.com>  Sun, 13 Dec 2020 16:09:46 -0800
+
+golang-gg-scm-pkg-git (0.4.1-1~1.gbpb622ff) gg; urgency=medium
 
   ** SNAPSHOT build @b622ff22d44eadf4c2482383f0bc753c01bade99 **
 
