@@ -5,6 +5,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.7.3...main
 
+## [Unreleased][]
+
+### Added
+
+-  A new `packfile package` enables reading and writing the Git packfile format.
+
 ## [0.7.3][] - 2020-12-13
 
 Version 0.7.3 releases minor fixes.
