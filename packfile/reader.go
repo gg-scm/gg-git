@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+
+	"gg-scm.io/pkg/git/githash"
 )
 
 // ByteReader is a combination of io.Reader and io.ByteReader.
@@ -88,7 +90,7 @@ func (r *Reader) Next() (*Header, error) {
 	if r.nobjs == 0 {
 		// Consume trailing checksum.
 		// TODO(someday): Verify integrity. This is a SHA-1 hash.
-		if _, err := io.CopyN(ioutil.Discard, &r.r, 20); err != nil {
+		if _, err := io.CopyN(ioutil.Discard, &r.r, githash.SHA1Size); err != nil {
 			return nil, fmt.Errorf("packfile: read trailing checksum: %w", err)
 		}
 		return nil, io.EOF
@@ -220,7 +222,7 @@ type Header struct {
 	// BaseOffset is the Offset of a previous Header for an OffsetDelta type object.
 	BaseOffset int64
 	// BaseObject is the hash of an object for a RefDelta type object.
-	BaseObject [20]byte
+	BaseObject githash.SHA1
 }
 
 // An ObjectType holds the type of an object inside a packfile.

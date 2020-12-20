@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"gg-scm.io/pkg/git/githash"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -114,7 +115,7 @@ var testFiles = []struct {
 					Offset: 31,
 					Type:   RefDelta,
 					Size:   13,
-					BaseObject: [20]byte{
+					BaseObject: githash.SHA1{
 						0x05, 0xa6, 0x82, 0xbd, 0x4e, 0x7c, 0x71, 0x17, 0xc5, 0x85,
 						0x6b, 0xe7, 0x14, 0x2f, 0xea, 0x67, 0x46, 0x54, 0x15, 0xe3,
 					},
