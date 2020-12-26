@@ -19,6 +19,8 @@ package packfile
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"io/ioutil"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -27,6 +29,9 @@ import (
 
 func TestWriter(t *testing.T) {
 	for _, test := range testFiles {
+		if test.wantError {
+			continue
+		}
 		t.Run(test.name, func(t *testing.T) {
 			out := new(bytes.Buffer)
 			w := NewWriter(out, uint32(len(test.want)))
@@ -69,6 +74,43 @@ func TestWriter(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("TooLong", func(t *testing.T) {
+		w := NewWriter(ioutil.Discard, 1)
+		const blobContent = "Hi"
+		_, err := w.WriteHeader(&Header{
+			Type: Blob,
+			Size: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(w, blobContent); err == nil {
+			t.Error("Write did not return an error")
+		} else {
+			t.Log("Error message:", err)
+		}
+	})
+
+	t.Run("TooShort", func(t *testing.T) {
+		w := NewWriter(ioutil.Discard, 1)
+		const blobContent = "Hello"
+		_, err := w.WriteHeader(&Header{
+			Type: Blob,
+			Size: int64(len(blobContent) + 1),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(w, blobContent); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err == nil {
+			t.Error("Close did not return an error")
+		} else {
+			t.Log("Error message:", err)
+		}
+	})
 }
 
 func TestAppendLengthType(t *testing.T) {

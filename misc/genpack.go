@@ -38,6 +38,8 @@ func main() {
 		"DeltaOffset":  deltaOffset,
 		"ObjectOffset": objectOffset,
 		"EmptyBlob":    emptyBlob,
+		"TooLong":      tooLong,
+		"TooShort":     tooShort,
 	}
 	var names []string
 	for k := range funcMap {
@@ -279,6 +281,50 @@ func emptyBlob() (err error) {
 		return err
 	}
 
+	return nil
+}
+
+func tooLong() (err error) {
+	// You will need to comment out integrity checks in the writer to have this run.
+	w := packfile.NewWriter(os.Stdout, 1)
+	defer func() {
+		if closeErr := w.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	const blobContent = "Hi"
+	_, err = w.WriteHeader(&packfile.Header{
+		Type: packfile.Blob,
+		Size: 1,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, blobContent); err != nil {
+		return err
+	}
+	return nil
+}
+
+func tooShort() (err error) {
+	// You will need to comment out integrity checks in the writer to have this run.
+	w := packfile.NewWriter(os.Stdout, 1)
+	defer func() {
+		if closeErr := w.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	const blobContent = "Hello"
+	_, err = w.WriteHeader(&packfile.Header{
+		Type: packfile.Blob,
+		Size: int64(len(blobContent) + 1),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, blobContent); err != nil {
+		return err
+	}
 	return nil
 }
 

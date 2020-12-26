@@ -35,9 +35,11 @@ type ByteReader interface {
 
 // Reader reads a packfile.
 type Reader struct {
-	r          byteReaderCounter
-	nobjs      uint32
+	r     byteReaderCounter
+	nobjs uint32
+
 	dataReader zlibReader
+	remaining  int64
 }
 
 // NewReader returns a Reader that reads from the given stream.
@@ -76,8 +78,15 @@ func (r *Reader) Next() (*Header, error) {
 		return nil, err
 	}
 	if r.dataReader != nil {
-		if _, err := io.Copy(ioutil.Discard, r.dataReader); err != nil {
+		n, err := io.Copy(ioutil.Discard, r.dataReader)
+		if err != nil {
 			return nil, fmt.Errorf("packfile: advance to next object: %w", err)
+		}
+		if n > r.remaining {
+			return nil, errTooLong
+		}
+		if n < r.remaining {
+			return nil, errTooShort
 		}
 		r.dataReader.Close()
 	}
@@ -118,6 +127,7 @@ func (r *Reader) Next() (*Header, error) {
 			return nil, fmt.Errorf("packfile: %w", err)
 		}
 	}
+	r.remaining = hdr.Size
 	r.nobjs--
 	return hdr, nil
 }
@@ -129,12 +139,28 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if r.dataReader == nil {
 		return 0, fmt.Errorf("packfile: Read() called before Next()")
 	}
+	if r.remaining < 0 {
+		return 0, errTooLong
+	}
 	n, err := r.dataReader.Read(p)
-	if err != nil && !errors.Is(err, io.EOF) {
+	r.remaining -= int64(n)
+	if r.remaining < 0 {
+		// We've gone past the declared size. Don't return more bytes than we
+		// advertised to the caller.
+		return n - int(-r.remaining), errTooLong
+	}
+	if errors.Is(err, io.EOF) && r.remaining > 0 {
+		err = fmt.Errorf("packfile: %w", io.ErrUnexpectedEOF)
+	} else if err != nil && !errors.Is(err, io.EOF) {
 		err = fmt.Errorf("packfile: %w", err)
 	}
 	return n, err
 }
+
+var (
+	errTooLong  = errors.New("packfile: object longer than header size")
+	errTooShort = errors.New("packfile: object shorter than header size")
+)
 
 func readLengthType(br io.ByteReader) (ObjectType, int64, error) {
 	first, err := br.ReadByte()

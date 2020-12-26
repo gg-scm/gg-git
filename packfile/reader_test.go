@@ -36,8 +36,9 @@ type unpackedObject struct {
 }
 
 var testFiles = []struct {
-	name string
-	want []unpackedObject
+	name      string
+	want      []unpackedObject
+	wantError bool
 }{
 	{
 		name: "Empty",
@@ -145,6 +146,34 @@ var testFiles = []struct {
 			},
 		},
 	},
+	{
+		name: "TooLong",
+		want: []unpackedObject{
+			{
+				Header: &Header{
+					Offset: 12,
+					Type:   Blob,
+					Size:   1,
+				},
+				Data: []byte("H"),
+			},
+		},
+		wantError: true,
+	},
+	{
+		name: "TooShort",
+		want: []unpackedObject{
+			{
+				Header: &Header{
+					Offset: 12,
+					Type:   Blob,
+					Size:   6,
+				},
+				Data: []byte("Hello"),
+			},
+		},
+		wantError: true,
+	},
 }
 
 // helloDelta is the set of instructions to transform "Hello!" into "Hello, delta\n".
@@ -167,7 +196,12 @@ func TestReader(t *testing.T) {
 			defer f.Close()
 			got, err := readAll(bufio.NewReader(f))
 			if err != nil {
-				t.Error(err)
+				t.Log("Error:", err)
+				if !test.wantError {
+					t.Fail()
+				}
+			} else if test.wantError {
+				t.Error("No error returned")
 			}
 			if diff := cmp.Diff(test.want, got); diff != "" {
 				t.Errorf("objects (-want +got):\n%s", diff)
