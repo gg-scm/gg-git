@@ -34,7 +34,7 @@ import (
 func main() {
 	funcMap := map[string]func() error{
 		"Empty":        empty,
-		"NoDelta":      noDelta,
+		"FirstCommit":  firstCommit,
 		"DeltaOffset":  deltaOffset,
 		"ObjectOffset": objectOffset,
 	}
@@ -73,7 +73,7 @@ func empty() error {
 	return w.Close()
 }
 
-func noDelta() (err error) {
+func firstCommit() (err error) {
 	w := packfile.NewWriter(os.Stdout, 3)
 	defer func() {
 		if closeErr := w.Close(); err == nil && closeErr != nil {
