@@ -124,6 +124,27 @@ var testFiles = []struct {
 			},
 		},
 	},
+	{
+		name: "EmptyBlob",
+		want: []unpackedObject{
+			{
+				Header: &Header{
+					Offset: 12,
+					Type:   Blob,
+					Size:   0,
+				},
+				Data: []byte{},
+			},
+			{
+				Header: &Header{
+					Offset: 24,
+					Type:   Blob,
+					Size:   14,
+				},
+				Data: []byte("Hello, World!\n"),
+			},
+		},
+	},
 }
 
 // helloDelta is the set of instructions to transform "Hello!" into "Hello, delta\n".

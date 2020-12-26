@@ -37,6 +37,7 @@ func main() {
 		"FirstCommit":  firstCommit,
 		"DeltaOffset":  deltaOffset,
 		"ObjectOffset": objectOffset,
+		"EmptyBlob":    emptyBlob,
 	}
 	var names []string
 	for k := range funcMap {
@@ -245,6 +246,39 @@ func validateDelta(want, base string, delta []byte) error {
 	if !bytes.Equal(buf.Bytes(), []byte(want)) {
 		return fmt.Errorf("validate delta: does not produce expected data (got %q; want %q)", buf, want)
 	}
+	return nil
+}
+
+func emptyBlob() (err error) {
+	w := packfile.NewWriter(os.Stdout, 2)
+	defer func() {
+		if closeErr := w.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	// Empty blob
+	_, err = w.WriteHeader(&packfile.Header{
+		Type: packfile.Blob,
+		Size: 0,
+	})
+	if err != nil {
+		return err
+	}
+
+	// One blob after
+	const blobContent = "Hello, World!\n"
+	_, err = w.WriteHeader(&packfile.Header{
+		Type: packfile.Blob,
+		Size: int64(len(blobContent)),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, blobContent); err != nil {
+		return err
+	}
+
 	return nil
 }
 
