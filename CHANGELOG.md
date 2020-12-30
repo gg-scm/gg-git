@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
--  A new `packfile package` enables reading and writing the Git packfile format.
+-  A new `object` package enables serializing and deserializing Git objects.
+-  A new `packfile` package enables reading and writing the Git packfile format.
+   ([#4](https://github.com/gg-scm/gg-git/issues/4))
 
 ## [0.7.3][] - 2020-12-13
 
