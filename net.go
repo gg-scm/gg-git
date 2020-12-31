@@ -28,7 +28,7 @@ import (
 // This function may block on user input if the remote requires
 // credentials.
 func (g *Git) ListRemoteRefs(ctx context.Context, remote string) (map[Ref]Hash, error) {
-	// TODO(now): Add tests.
+	// TODO(someday): Add tests.
 
 	errPrefix := fmt.Sprintf("git ls-remote %q", remote)
 	out, err := g.output(ctx, errPrefix, []string{"ls-remote", "--quiet", "--", remote})

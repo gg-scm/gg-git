@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gg-scm.io/pkg/git/object"
 )
 
 // WorkTree determines the absolute path of the root of the current
@@ -165,45 +167,57 @@ func (g *Git) IsAncestor(ctx context.Context, rev1, rev2 string) (bool, error) {
 // TreeEntry represents a single entry in a Git tree object.
 // It implements os.FileInfo.
 type TreeEntry struct {
-	mode   os.FileMode
-	typ    string
-	object Hash
-	size   int64
-	path   TopPath
+	size int64
+	raw  object.TreeEntry
 }
 
 // Name returns the base name of the file.
-func (ent *TreeEntry) Name() string { return slashpath.Base(string(ent.path)) }
+func (ent *TreeEntry) Name() string { return slashpath.Base(string(ent.raw.Name)) }
 
 // Path returns the file's path relative to the root of the repository.
-func (ent *TreeEntry) Path() TopPath { return ent.path }
+func (ent *TreeEntry) Path() TopPath { return TopPath(ent.raw.Name) }
 
 // Size returns the length in bytes for blobs.
 func (ent *TreeEntry) Size() int64 { return ent.size }
 
 // Mode returns the file mode bits.
-func (ent *TreeEntry) Mode() os.FileMode { return ent.mode }
+func (ent *TreeEntry) Mode() os.FileMode {
+	mode, ok := ent.raw.Mode.FileMode()
+	if !ok {
+		panic("unsupported mode")
+	}
+	return mode
+}
 
 // ModTime returns the zero time. It exists purely to satisfy the
 // os.FileInfo interface.
 func (ent *TreeEntry) ModTime() time.Time { return time.Time{} }
 
 // IsDir reports whether the file mode indicates a directory.
-func (ent *TreeEntry) IsDir() bool { return ent.mode.IsDir() }
+func (ent *TreeEntry) IsDir() bool { return ent.raw.Mode.IsDir() }
 
 // Sys returns nil. It exists purely to satisfy the os.FileInfo interface.
 func (ent *TreeEntry) Sys() interface{} { return nil }
 
 // ObjectType returns the file's Git object type. Possible values are "blob",
 // "tree", or "commit".
-func (ent *TreeEntry) ObjectType() string { return ent.typ }
+func (ent *TreeEntry) ObjectType() string {
+	switch ent.raw.Mode {
+	case object.ModeGitlink:
+		return "commit"
+	case object.ModeDir:
+		return "tree"
+	default:
+		return "blob"
+	}
+}
 
 // Object returns the hash of the file's Git object.
-func (ent *TreeEntry) Object() Hash { return ent.object }
+func (ent *TreeEntry) Object() Hash { return ent.raw.ObjectID }
 
 // String formats the entry similar to `git ls-tree` output.
 func (ent *TreeEntry) String() string {
-	return fmt.Sprintf("%v %s %v %s", ent.mode, ent.typ, ent.object, ent.path)
+	return fmt.Sprintf("%v %s %v %s", ent.raw.Mode, ent.ObjectType(), ent.raw.ObjectID, ent.raw.Name)
 }
 
 // ListTreeOptions specifies the command-line options for `git ls-tree`.
@@ -264,7 +278,7 @@ func (g *Git) ListTree(ctx context.Context, rev string, opts ListTreeOptions) (m
 			if err != nil {
 				return tree, fmt.Errorf("%s: %w", errPrefix, err)
 			}
-			tree[ent.path] = ent
+			tree[TopPath(ent.raw.Name)] = ent
 			out = trail
 		}
 	}
@@ -281,46 +295,32 @@ func parseTreeEntry(out string) (_ *TreeEntry, trail string, _ error) {
 	if entryEnd == -1 {
 		return nil, trail, errors.New("missing \\t in entry")
 	}
-	ent := &TreeEntry{path: TopPath(out[entryEnd+1 : end])}
+	ent := &TreeEntry{raw: object.TreeEntry{Name: string(out[entryEnd+1 : end])}}
 	parts := strings.SplitN(out[:entryEnd], " ", 4)
 	if len(parts) != 4 {
-		return nil, trail, fmt.Errorf("%s: entry has %d fields (4 expected)", ent.path, len(parts))
+		return nil, trail, fmt.Errorf("%s: entry has %d fields (4 expected)", ent.raw.Name, len(parts))
 	}
 
-	mode, err := strconv.ParseUint(parts[0], 8, 64)
+	mode, err := strconv.ParseUint(parts[0], 8, 32)
 	if err != nil {
-		return nil, trail, fmt.Errorf("%s: mode: %v", ent.path, err)
+		return nil, trail, fmt.Errorf("%s: mode: %v", ent.raw.Name, err)
 	}
-	const (
-		fmtMask       = 0170000
-		submoduleType = 0160000
-		linkType      = 0120000
-		dirType       = 0040000
-		regType       = 0100000
-	)
-	if mode&^(uint64(os.ModePerm)|fmtMask) != 0 {
-		return nil, trail, fmt.Errorf("%s: mode: %#o unsupported", ent.path, mode)
-	}
-	ent.mode = os.FileMode(mode) & os.ModePerm
-	switch mode & fmtMask {
-	case regType:
-	case dirType, submoduleType:
-		ent.mode |= os.ModeDir
-	case linkType:
-		ent.mode |= os.ModeSymlink
-	default:
-		return nil, trail, fmt.Errorf("%s: mode: %#o unsupported", ent.path, mode)
+	ent.raw.Mode = object.Mode(mode)
+	if _, ok := ent.raw.Mode.FileMode(); !ok {
+		return nil, trail, fmt.Errorf("%s: mode: %v unsupported", ent.raw.Name, ent.raw.Mode)
 	}
 
-	ent.typ = parts[1]
-	ent.object, err = ParseHash(parts[2])
+	if got, expect := parts[1], ent.ObjectType(); got != expect {
+		return nil, trail, fmt.Errorf("%s: object: type is %q (expected %q based on mode %v)", ent.raw.Name, got, expect, ent.raw.Mode)
+	}
+	ent.raw.ObjectID, err = ParseHash(parts[2])
 	if err != nil {
-		return nil, trail, fmt.Errorf("%s: object: %v", ent.path, err)
+		return nil, trail, fmt.Errorf("%s: object: %v", ent.raw.Name, err)
 	}
 	if size := strings.TrimLeft(parts[3], " "); size != "-" {
 		ent.size, err = strconv.ParseInt(size, 10, 64)
 		if err != nil {
-			return nil, trail, fmt.Errorf("%s: object size: %v", ent.path, err)
+			return nil, trail, fmt.Errorf("%s: object size: %v", ent.raw.Name, err)
 		}
 	}
 	return ent, trail, nil
@@ -520,27 +520,23 @@ func (g *Git) Remove(ctx context.Context, pathspecs []Pathspec, opts RemoveOptio
 // CommitOptions overrides the default metadata for a commit. Any fields
 // with zero values will use the value inferred from Git's environment.
 type CommitOptions struct {
-	Author     User
+	Author     object.User
 	AuthorTime time.Time
-	Committer  User
+	Committer  object.User
 	CommitTime time.Time
 }
 
 func (opts CommitOptions) addToEnv(env []string) []string {
-	if opts.Author.Name != "" {
-		env = append(env, "GIT_AUTHOR_NAME="+opts.Author.Name)
-	}
-	if opts.Author.Email != "" {
-		env = append(env, "GIT_AUTHOR_EMAIL="+opts.Author.Email)
+	if opts.Author != "" {
+		env = append(env, "GIT_AUTHOR_NAME="+opts.Author.Name())
+		env = append(env, "GIT_AUTHOR_EMAIL="+opts.Author.Email())
 	}
 	if !opts.AuthorTime.IsZero() {
 		env = append(env, "GIT_AUTHOR_DATE="+opts.AuthorTime.Format(time.RFC3339))
 	}
-	if opts.Committer.Name != "" {
-		env = append(env, "GIT_COMMITTER_NAME="+opts.Committer.Name)
-	}
-	if opts.Committer.Email != "" {
-		env = append(env, "GIT_COMMITTER_EMAIL="+opts.Committer.Email)
+	if opts.Committer != "" {
+		env = append(env, "GIT_COMMITTER_NAME="+opts.Committer.Name())
+		env = append(env, "GIT_COMMITTER_EMAIL="+opts.Committer.Email())
 	}
 	if !opts.CommitTime.IsZero() {
 		env = append(env, "GIT_COMMITTER_DATE="+opts.CommitTime.Format(time.RFC3339))
@@ -643,32 +639,23 @@ type AmendOptions struct {
 	// Otherwise, the previous commit's message will be used.
 	Message string
 	// If Author is filled out, then it will be used as the commit author.
-	// If Author is the zero value, then the previous commit's author will
-	// be used. If Author is partially filled out, the Amend methods will
-	// return an error.
-	Author User
+	// If Author is blank, then the previous commit's author will be used.
+	Author object.User
 	// If AuthorTime is not zero, then it will be used as the author time.
 	// Otherwise, the previous commit's author time will be used.
 	AuthorTime time.Time
 
-	// Committer fields set to non-zero values will override the default
-	// committer information from Git configuration.
-	Committer User
+	// If Committer is not empty, then it will override the default committer
+	// information from Git configuration.
+	Committer object.User
 	// If CommitTime is not zero, then it will be used as the commit time
 	// instead of now.
 	CommitTime time.Time
 }
 
-func (opts AmendOptions) validate() error {
-	if (opts.Author.Name != "") != (opts.Author.Email != "") {
-		return errors.New("author partially filled")
-	}
-	return nil
-}
-
 func (opts AmendOptions) addAuthorToArgs(args []string) []string {
-	if opts.Author != (User{}) {
-		args = append(args, "--author="+opts.Author.String())
+	if opts.Author != "" {
+		args = append(args, "--author="+string(opts.Author))
 	}
 	if !opts.AuthorTime.IsZero() {
 		args = append(args, "--date="+opts.AuthorTime.Format(time.RFC3339))
@@ -677,11 +664,9 @@ func (opts AmendOptions) addAuthorToArgs(args []string) []string {
 }
 
 func (opts AmendOptions) addToEnv(env []string) []string {
-	if opts.Committer.Name != "" {
-		env = append(env, "GIT_COMMITTER_NAME="+opts.Committer.Name)
-	}
-	if opts.Committer.Email != "" {
-		env = append(env, "GIT_COMMITTER_EMAIL="+opts.Committer.Email)
+	if opts.Committer != "" {
+		env = append(env, "GIT_COMMITTER_NAME="+opts.Committer.Name())
+		env = append(env, "GIT_COMMITTER_EMAIL="+opts.Committer.Email())
 	}
 	if !opts.CommitTime.IsZero() {
 		env = append(env, "GIT_COMMITTER_DATE="+opts.CommitTime.Format(time.RFC3339))
@@ -693,9 +678,6 @@ func (opts AmendOptions) addToEnv(env []string) []string {
 // the content of the index.
 func (g *Git) Amend(ctx context.Context, opts AmendOptions) error {
 	const errPrefix = "git commit --amend"
-	if err := opts.validate(); err != nil {
-		return fmt.Errorf("%s: %w", errPrefix, err)
-	}
 	msg := opts.Message
 	if msg == "" {
 		info, err := g.CommitInfo(ctx, "HEAD")
@@ -730,9 +712,6 @@ func (g *Git) Amend(ctx context.Context, opts AmendOptions) error {
 // with the content of the working copy for all tracked files.
 func (g *Git) AmendAll(ctx context.Context, opts AmendOptions) error {
 	const errPrefix = "git commit --amend --all"
-	if err := opts.validate(); err != nil {
-		return fmt.Errorf("%s: %w", errPrefix, err)
-	}
 	msg := opts.Message
 	if msg == "" {
 		info, err := g.CommitInfo(ctx, "HEAD")
@@ -772,9 +751,6 @@ func (g *Git) AmendAll(ctx context.Context, opts AmendOptions) error {
 // the commit, just the options specified.
 func (g *Git) AmendFiles(ctx context.Context, pathspecs []Pathspec, opts AmendOptions) error {
 	const errPrefix = "git commit --amend --only"
-	if err := opts.validate(); err != nil {
-		return fmt.Errorf("%s: %w", errPrefix, err)
-	}
 	msg := opts.Message
 	if msg == "" {
 		info, err := g.CommitInfo(ctx, "HEAD")

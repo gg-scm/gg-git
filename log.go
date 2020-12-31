@@ -22,46 +22,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
+
+	"gg-scm.io/pkg/git/object"
 )
 
-// CommitInfo stores information about a single commit.
-type CommitInfo struct {
-	Hash       Hash
-	Parents    []Hash
-	Author     User
-	Committer  User
-	AuthorTime time.Time
-	CommitTime time.Time
-	Message    string
-}
-
-// Summary returns the first line of the message.
-func (c *CommitInfo) Summary() string {
-	i := strings.IndexByte(c.Message, '\n')
-	if i == -1 {
-		return c.Message
-	}
-	return c.Message[:i]
-}
-
-// User identifies an author or committer.
-type User struct {
-	// Name is the user's full name.
-	Name string
-	// Email is the user's email address.
-	Email string
-}
-
-// String returns the user information as a string in the
-// form "User Name <foo@example.com>".
-func (u User) String() string {
-	return fmt.Sprintf("%s <%s>", u.Name, u.Email)
-}
-
 // CommitInfo obtains information about a single commit.
-func (g *Git) CommitInfo(ctx context.Context, rev string) (*CommitInfo, error) {
-	errPrefix := fmt.Sprintf("git log %q", rev)
+func (g *Git) CommitInfo(ctx context.Context, rev string) (*object.Commit, error) {
+	errPrefix := fmt.Sprintf("git cat-file commit %q", rev)
 	if err := validateRev(rev); err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -76,75 +43,18 @@ func (g *Git) CommitInfo(ctx context.Context, rev string) (*CommitInfo, error) {
 	}
 
 	out, err := g.output(ctx, errPrefix, []string{
-		"log",
-		"--max-count=1",
-		"-z",
-		"--pretty=" + commitInfoPrettyFormat,
+		"cat-file",
+		"commit",
 		rev,
-		"--",
 	})
 	if err != nil {
 		return nil, err
 	}
-	info, err := parseCommitInfo(out)
+	c, err := object.ParseCommit([]byte(out))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	return info, nil
-}
-
-const (
-	commitInfoPrettyFormat = "tformat:%H%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B"
-	commitInfoFieldCount   = 9
-)
-
-func parseCommitInfo(out string) (*CommitInfo, error) {
-	if !strings.HasSuffix(out, "\x00") {
-		return nil, errors.New("parse commit: invalid format")
-	}
-	fields := strings.Split(out[:len(out)-1], "\x00")
-	if len(fields) != commitInfoFieldCount {
-		return nil, errors.New("parse commit: invalid format")
-	}
-	hash, err := ParseHash(fields[0])
-	if err != nil {
-		return nil, fmt.Errorf("parse commit: hash: %w", err)
-	}
-
-	var parents []Hash
-	if parentStrings := strings.Fields(fields[1]); len(parentStrings) > 0 {
-		parents = make([]Hash, 0, len(parentStrings))
-		for _, s := range parentStrings {
-			p, err := ParseHash(s)
-			if err != nil {
-				return nil, fmt.Errorf("parse commit: parents: %w", err)
-			}
-			parents = append(parents, p)
-		}
-	}
-	authorTime, err := time.Parse(time.RFC3339, fields[4])
-	if err != nil {
-		return nil, fmt.Errorf("parse commit: author time: %w", err)
-	}
-	commitTime, err := time.Parse(time.RFC3339, fields[7])
-	if err != nil {
-		return nil, fmt.Errorf("parse commit: commit time: %w", err)
-	}
-	return &CommitInfo{
-		Hash:    hash,
-		Parents: parents,
-		Author: User{
-			Name:  fields[2],
-			Email: fields[3],
-		},
-		Committer: User{
-			Name:  fields[5],
-			Email: fields[6],
-		},
-		AuthorTime: authorTime,
-		CommitTime: commitTime,
-		Message:    fields[8],
-	}, nil
+	return c, nil
 }
 
 // LogOptions specifies filters and ordering on a log listing.
@@ -180,13 +90,13 @@ type LogOptions struct {
 func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 	// TODO(someday): Add an example for this method.
 
-	const errPrefix = "git log"
+	const errPrefix = "git rev-list"
 	for _, rev := range opts.Revs {
 		if err := validateRev(rev); err != nil {
 			return nil, fmt.Errorf("%s: %w", errPrefix, err)
 		}
 	}
-	args := []string{"log", "-z", "--pretty=" + commitInfoPrettyFormat}
+	args := []string{"rev-list", "--header"}
 	if opts.MaxParents > 0 || opts.AllowZeroMaxParents {
 		args = append(args, fmt.Sprintf("--max-parents=%d", opts.MaxParents))
 	}
@@ -202,7 +112,11 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 	if opts.NoWalk {
 		args = append(args, "--no-walk=sorted")
 	}
-	args = append(args, opts.Revs...)
+	if len(opts.Revs) == 0 {
+		args = append(args, "HEAD")
+	} else {
+		args = append(args, opts.Revs...)
+	}
 	args = append(args, "--")
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -230,7 +144,7 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 	}, nil
 }
 
-// Log is an open handle to a `git log` subprocess. Closing the Log
+// Log is an open handle to a `git rev-list` subprocess. Closing the Log
 // stops the subprocess.
 type Log struct {
 	r      *bufio.Reader
@@ -239,7 +153,7 @@ type Log struct {
 
 	scanErr  error
 	scanDone bool
-	info     *CommitInfo
+	info     *object.Commit
 }
 
 // Next attempts to scan the next log entry and returns whether there is a new entry.
@@ -252,7 +166,7 @@ func (l *Log) Next() bool {
 	end := -1
 	for n := l.r.Buffered(); n < l.r.Size(); {
 		data, err := l.r.Peek(n)
-		end = findCommitInfoEnd(data)
+		end = bytes.IndexByte(data, 0)
 		if end != -1 {
 			break
 		}
@@ -277,24 +191,52 @@ func (l *Log) Next() bool {
 		l.abort(bufio.ErrBufferFull)
 		return false
 	}
-
-	// Parse entry.
 	data, err := l.r.Peek(end)
 	if err != nil {
 		// Should already be buffered.
 		panic(err)
 	}
-	info, err := parseCommitInfo(string(data))
-	if err != nil {
+
+	// Read the commit hash (first line).
+	firstLineEnd := bytes.IndexByte(data, '\n')
+	if firstLineEnd == -1 {
+		l.abort(fmt.Errorf("parse rev-list: missing line feed"))
+		return false
+	}
+	var expectSum Hash
+	if err := expectSum.UnmarshalText(data[:firstLineEnd]); err != nil {
 		l.abort(err)
 		return false
 	}
-	if _, err := l.r.Discard(end); err != nil {
+
+	// Parse the commit.
+	info, err := object.ParseCommit(data[firstLineEnd+1 : end])
+	if err != nil {
+		l.abort(fmt.Errorf("commit %v: %w", expectSum, err))
+		return false
+	}
+	info.Message = cleanLogMessage(info.Message)
+	if info.SHA1() != expectSum {
+		l.abort(fmt.Errorf("commit %v: data does not match object ID", expectSum))
+		return false
+	}
+	if _, err := l.r.Discard(end + 1); err != nil {
 		// Should already be buffered.
 		panic(err)
 	}
 	l.info = info
 	return true
+}
+
+// cleanLogMessage removes the indents that `git rev-list` "helpfully" inserts
+// into the message, despite the man page claiming "the raw format shows the
+// entire commit exactly as stored in the commit object."
+func cleanLogMessage(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimPrefix(line, "    ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (l *Log) abort(e error) {
@@ -305,23 +247,9 @@ func (l *Log) abort(e error) {
 	l.cancel()
 }
 
-func findCommitInfoEnd(b []byte) int {
-	nuls := 0
-	for i := range b {
-		if b[i] != 0 {
-			continue
-		}
-		nuls++
-		if nuls == commitInfoFieldCount {
-			return i + 1
-		}
-	}
-	return -1
-}
-
 // CommitInfo returns the most recently scanned log entry.
 // Next must be called at least once before calling CommitInfo.
-func (l *Log) CommitInfo() *CommitInfo {
+func (l *Log) CommitInfo() *object.Commit {
 	return l.info
 }
 

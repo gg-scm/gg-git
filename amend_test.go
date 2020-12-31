@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
+	"gg-scm.io/pkg/git/object"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
@@ -31,6 +32,7 @@ func TestAmend(t *testing.T) {
 		t.Skip("git not found:", err)
 	}
 	ctx := context.Background()
+
 	t.Run("LocalChanges", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
@@ -84,25 +86,17 @@ func TestAmend(t *testing.T) {
 
 		// Call g.Amend.
 		const (
-			wantAuthorName     = "Lisbeth Salander"
-			wantAuthorEmail    = "lisbeth@example.com"
-			wantCommitterName  = "Octo Cat"
-			wantCommitterEmail = "noreply@github.com"
-			wantMessage        = "\n\ninternal/git made this commit"
+			wantAuthor    object.User = "Lisbeth Salander <lisbeth@example.com>"
+			wantCommitter object.User = "Octo Cat <noreply@github.com>"
+			wantMessage               = "\n\ninternal/git made this commit"
 		)
 		wantAuthorTime := time.Date(2018, time.February, 20, 15, 47, 42, 0, time.FixedZone("UTC-8", -8*60*60))
 		wantCommitTime := time.Date(2018, time.December, 29, 8, 58, 24, 0, time.FixedZone("UTC-8", -8*60*60))
 		err = env.g.Amend(ctx, AmendOptions{
-			Message: wantMessage,
-			Author: User{
-				Name:  wantAuthorName,
-				Email: wantAuthorEmail,
-			},
+			Message:    wantMessage,
+			Author:     wantAuthor,
 			AuthorTime: wantAuthorTime,
-			Committer: User{
-				Name:  wantCommitterName,
-				Email: wantCommitterEmail,
-			},
+			Committer:  wantCommitter,
 			CommitTime: wantCommitTime,
 		})
 		if err != nil {
@@ -114,25 +108,36 @@ func TestAmend(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Verify that HEAD was moved to a new commit.
-		if got.Hash == r1.Commit {
+		if got.SHA1() == r1.Commit {
 			t.Error("new HEAD = initial import")
 		}
-		// Verify all the other commit fields.
-		want := &CommitInfo{
-			Parents: []Hash{},
-			Author: User{
-				Name:  wantAuthorName,
-				Email: wantAuthorEmail,
-			},
+		// Verify the commit fields.
+		want := &object.Commit{
+			Tree: object.Tree{
+				{
+					Name:     "added.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(addContent),
+				},
+				{
+					Name:     "modified_staged.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(modifiedNew),
+				},
+				{
+					Name:     "modified_unstaged.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(modifiedOld),
+				},
+			}.SHA1(),
+			Parents:    []Hash{},
+			Author:     wantAuthor,
 			AuthorTime: wantAuthorTime,
-			Committer: User{
-				Name:  wantCommitterName,
-				Email: wantCommitterEmail,
-			},
+			Committer:  wantCommitter,
 			CommitTime: wantCommitTime,
 			Message:    wantMessage,
 		}
-		if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(CommitInfo{}, "Hash"), equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
+		if diff := cmp.Diff(want, got, equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("CommitInfo(ctx, \"HEAD\") diff (-want +got):\n%s", diff)
 		}
 		// Verify that HEAD is still pointing to main.
@@ -141,32 +146,8 @@ func TestAmend(t *testing.T) {
 		} else if head.Ref != "refs/heads/main" {
 			t.Errorf("HEAD ref = %s; want refs/heads/main", head.Ref)
 		}
-		// Verify file contents of commit.
-		wantTree := map[TopPath]*TreeEntry{
-			"added.txt":             nil,
-			"modified_staged.txt":   nil,
-			"modified_unstaged.txt": nil,
-		}
-		tree, err := env.g.ListTree(ctx, "HEAD", ListTreeOptions{
-			Recursive: true,
-			NameOnly:  true,
-		})
-		if err != nil {
-			t.Error(err)
-		} else if diff := cmp.Diff(wantTree, tree, cmp.AllowUnexported(TreeEntry{})); diff != "" {
-			t.Errorf("ListTree(ctx, \"HEAD\", nil) diff (-want +got):\n%s", diff)
-		}
-		if got, err := catFile(ctx, env.g, "HEAD", "modified_staged.txt"); err != nil {
-			t.Error(err)
-		} else if got != modifiedNew {
-			t.Errorf("modified_staged.txt @ HEAD = %q; want %q", got, modifiedNew)
-		}
-		if got, err := catFile(ctx, env.g, "HEAD", "modified_unstaged.txt"); err != nil {
-			t.Error(err)
-		} else if got != modifiedOld {
-			t.Errorf("modified_unstaged.txt @ HEAD = %q; want %q", got, modifiedOld)
-		}
 	})
+
 	t.Run("DefaultOptions", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
@@ -194,17 +175,11 @@ func TestAmend(t *testing.T) {
 		if err := env.g.Add(ctx, []Pathspec{"modified_unstaged.txt", "modified_staged.txt", "deleted.txt"}, AddOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		const (
-			wantAuthorName  = "Lisbeth Salander"
-			wantAuthorEmail = "lisbeth@example.com"
-			wantMessage     = "\n\ninternal/git made this commit"
-		)
+		const wantAuthor object.User = "Lisbeth Salander <lisbeth@example.com>"
+		const wantMessage = "\n\ninternal/git made this commit"
 		wantAuthorTime := time.Date(2018, time.February, 20, 15, 47, 42, 0, time.FixedZone("UTC-8", -8*60*60))
 		err = env.g.Commit(ctx, wantMessage, CommitOptions{
-			Author: User{
-				Name:  wantAuthorName,
-				Email: wantAuthorEmail,
-			},
+			Author:     wantAuthor,
 			AuthorTime: wantAuthorTime,
 		})
 		if err != nil {
@@ -232,12 +207,9 @@ func TestAmend(t *testing.T) {
 		}
 
 		// Set committer in configuration.
-		const (
-			wantCommitterName  = "Octo Cat"
-			wantCommitterEmail = "noreply@github.com"
-		)
-		const config = "[user]\nname = " + wantCommitterName +
-			"\nemail = " + wantCommitterEmail + "\n"
+		const wantCommitter object.User = "Octo Cat <noreply@github.com>"
+		config := "[user]\nname = " + wantCommitter.Name() +
+			"\nemail = " + wantCommitter.Email() + "\n"
 		if err := env.top.Apply(filesystem.Write(".gitconfig", config)); err != nil {
 			t.Fatal(err)
 		}
@@ -253,24 +225,35 @@ func TestAmend(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Verify that HEAD was moved to a new commit.
-		if got.Hash == r1.Commit {
+		if got.SHA1() == r1.Commit {
 			t.Error("new HEAD = initial import")
 		}
-		// Verify all the other commit fields.
-		want := &CommitInfo{
-			Parents: []Hash{},
-			Author: User{
-				Name:  wantAuthorName,
-				Email: wantAuthorEmail,
-			},
+		// Verify the commit fields.
+		want := &object.Commit{
+			Tree: object.Tree{
+				{
+					Name:     "added.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(addContent),
+				},
+				{
+					Name:     "modified_staged.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(modifiedNew),
+				},
+				{
+					Name:     "modified_unstaged.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(modifiedOld),
+				},
+			}.SHA1(),
+			Parents:    []Hash{},
+			Author:     wantAuthor,
 			AuthorTime: wantAuthorTime,
-			Committer: User{
-				Name:  wantCommitterName,
-				Email: wantCommitterEmail,
-			},
-			Message: wantMessage,
+			Committer:  wantCommitter,
+			Message:    wantMessage,
 		}
-		if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(CommitInfo{}, "Hash", "CommitTime"), equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
+		if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(object.Commit{}, "CommitTime"), equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("CommitInfo(ctx, \"HEAD\") diff (-want +got):\n%s", diff)
 		}
 		// Verify that HEAD is still pointing to main.
@@ -278,31 +261,6 @@ func TestAmend(t *testing.T) {
 			t.Error(err)
 		} else if head.Ref != "refs/heads/main" {
 			t.Errorf("HEAD ref = %s; want refs/heads/main", head.Ref)
-		}
-		// Verify file contents of commit.
-		wantTree := map[TopPath]*TreeEntry{
-			"added.txt":             nil,
-			"modified_staged.txt":   nil,
-			"modified_unstaged.txt": nil,
-		}
-		tree, err := env.g.ListTree(ctx, "HEAD", ListTreeOptions{
-			Recursive: true,
-			NameOnly:  true,
-		})
-		if err != nil {
-			t.Error(err)
-		} else if diff := cmp.Diff(wantTree, tree, cmp.AllowUnexported(TreeEntry{})); diff != "" {
-			t.Errorf("ListTree(ctx, \"HEAD\", nil) diff (-want +got):\n%s", diff)
-		}
-		if got, err := catFile(ctx, env.g, "HEAD", "modified_staged.txt"); err != nil {
-			t.Error(err)
-		} else if got != modifiedNew {
-			t.Errorf("modified_staged.txt @ HEAD = %q; want %q", got, modifiedNew)
-		}
-		if got, err := catFile(ctx, env.g, "HEAD", "modified_unstaged.txt"); err != nil {
-			t.Error(err)
-		} else if got != modifiedOld {
-			t.Errorf("modified_unstaged.txt @ HEAD = %q; want %q", got, modifiedOld)
 		}
 	})
 }
@@ -313,6 +271,7 @@ func TestAmendFiles(t *testing.T) {
 		t.Skip("git not found:", err)
 	}
 	ctx := context.Background()
+
 	t.Run("Empty", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
@@ -377,6 +336,7 @@ func TestAmendFiles(t *testing.T) {
 			t.Errorf("file.txt @ HEAD = %q; want %q", got, oldContent)
 		}
 	})
+
 	t.Run("Unstaged", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
@@ -425,25 +385,17 @@ func TestAmendFiles(t *testing.T) {
 
 		// Call g.AmendFiles.
 		const (
-			wantAuthorName     = "Lisbeth Salander"
-			wantAuthorEmail    = "lisbeth@example.com"
-			wantCommitterName  = "Octo Cat"
-			wantCommitterEmail = "noreply@github.com"
-			wantMessage        = "\n\ninternal/git made this commit"
+			wantAuthor    object.User = "Lisbeth Salander <lisbeth@example.com>"
+			wantCommitter object.User = "Octo Cat <noreply@github.com>"
+			wantMessage               = "\n\ninternal/git made this commit"
 		)
 		wantAuthorTime := time.Date(2018, time.February, 20, 15, 47, 42, 0, time.FixedZone("UTC-8", -8*60*60))
 		wantCommitTime := time.Date(2018, time.December, 29, 8, 58, 24, 0, time.FixedZone("UTC-8", -8*60*60))
 		err = env.g.AmendFiles(ctx, []Pathspec{"unstaged.txt"}, AmendOptions{
-			Message: wantMessage,
-			Author: User{
-				Name:  wantAuthorName,
-				Email: wantAuthorEmail,
-			},
+			Message:    wantMessage,
+			Author:     wantAuthor,
 			AuthorTime: wantAuthorTime,
-			Committer: User{
-				Name:  wantCommitterName,
-				Email: wantCommitterEmail,
-			},
+			Committer:  wantCommitter,
 			CommitTime: wantCommitTime,
 		})
 		if err != nil {
@@ -455,25 +407,31 @@ func TestAmendFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Verify that HEAD was moved to a new commit.
-		if got.Hash == r1.Commit {
+		if got.SHA1() == r1.Commit {
 			t.Error("new HEAD = initial import")
 		}
-		// Verify all the other commit fields.
-		want := &CommitInfo{
-			Parents: []Hash{},
-			Author: User{
-				Name:  wantAuthorName,
-				Email: wantAuthorEmail,
-			},
+		// Verify the commit fields.
+		want := &object.Commit{
+			Tree: object.Tree{
+				{
+					Name:     "staged.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(oldContent),
+				},
+				{
+					Name:     "unstaged.txt",
+					Mode:     object.ModePlain,
+					ObjectID: blobSum(newContent),
+				},
+			}.SHA1(),
+			Parents:    []Hash{},
+			Author:     wantAuthor,
 			AuthorTime: wantAuthorTime,
-			Committer: User{
-				Name:  wantCommitterName,
-				Email: wantCommitterEmail,
-			},
+			Committer:  wantCommitter,
 			CommitTime: wantCommitTime,
 			Message:    wantMessage,
 		}
-		if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(CommitInfo{}, "Hash"), equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
+		if diff := cmp.Diff(want, got, equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("CommitInfo(ctx, \"HEAD\") diff (-want +got):\n%s", diff)
 		}
 		// Verify that HEAD is still pointing to main.
@@ -482,19 +440,8 @@ func TestAmendFiles(t *testing.T) {
 		} else if head.Ref != "refs/heads/main" {
 			t.Errorf("HEAD ref = %s; want refs/heads/main", head.Ref)
 		}
-
-		// Verify contents of commit.
-		if got, err := catFile(ctx, env.g, "HEAD", "staged.txt"); err != nil {
-			t.Error(err)
-		} else if got != oldContent {
-			t.Errorf("staged.txt @ HEAD = %q; want %q", got, oldContent)
-		}
-		if got, err := catFile(ctx, env.g, "HEAD", "unstaged.txt"); err != nil {
-			t.Error(err)
-		} else if got != newContent {
-			t.Errorf("unstaged.txt @ HEAD = %q; want %q", got, newContent)
-		}
 	})
+
 	t.Run("FromSubdir", func(t *testing.T) {
 		// Transparently handle the Git bug described in
 		// https://github.com/zombiezen/gg/issues/10
@@ -560,7 +507,7 @@ func TestAmendFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Verify that HEAD was moved to a new commit.
-		if got.Hash == r1.Commit {
+		if got.SHA1() == r1.Commit {
 			t.Error("new HEAD = initial import")
 		}
 		// Verify that commit took parents of parent commit.
@@ -568,17 +515,21 @@ func TestAmendFiles(t *testing.T) {
 			t.Errorf("parents = %v; want []", got.Parents)
 		}
 		// Verify file contents of commit.
-		wantTree := map[TopPath]*TreeEntry{
-			"bar/anchor.txt": nil,
-		}
-		tree, err := env.g.ListTree(ctx, "HEAD", ListTreeOptions{
-			Recursive: true,
-			NameOnly:  true,
-		})
-		if err != nil {
-			t.Error(err)
-		} else if diff := cmp.Diff(wantTree, tree, cmp.AllowUnexported(TreeEntry{})); diff != "" {
-			t.Errorf("ListTree(ctx, \"HEAD\", nil) diff (-want +got):\n%s", diff)
+		wantTree := object.Tree{
+			{
+				Name: "bar",
+				Mode: object.ModeDir,
+				ObjectID: object.Tree{
+					{
+						Name:     "anchor.txt",
+						Mode:     object.ModePlain,
+						ObjectID: blobSum(dummyContent),
+					},
+				}.SHA1(),
+			},
+		}.SHA1()
+		if got.Tree != wantTree {
+			t.Errorf("tree = %v; want %v", got.Tree, wantTree)
 		}
 	})
 }
@@ -635,25 +586,17 @@ func TestAmendAll(t *testing.T) {
 
 	// Call g.AmendAll.
 	const (
-		wantAuthorName     = "Lisbeth Salander"
-		wantAuthorEmail    = "lisbeth@example.com"
-		wantCommitterName  = "Octo Cat"
-		wantCommitterEmail = "noreply@github.com"
-		wantMessage        = "\n\ninternal/git made this commit"
+		wantAuthor    object.User = "Lisbeth Salander <lisbeth@example.com>"
+		wantCommitter object.User = "Octo Cat <noreply@github.com>"
+		wantMessage               = "\n\ninternal/git made this commit"
 	)
 	wantAuthorTime := time.Date(2018, time.February, 20, 15, 47, 42, 0, time.FixedZone("UTC-8", -8*60*60))
 	wantCommitTime := time.Date(2018, time.December, 29, 8, 58, 24, 0, time.FixedZone("UTC-8", -8*60*60))
 	err = env.g.AmendAll(ctx, AmendOptions{
-		Message: wantMessage,
-		Author: User{
-			Name:  wantAuthorName,
-			Email: wantAuthorEmail,
-		},
+		Message:    wantMessage,
+		Author:     wantAuthor,
 		AuthorTime: wantAuthorTime,
-		Committer: User{
-			Name:  wantCommitterName,
-			Email: wantCommitterEmail,
-		},
+		Committer:  wantCommitter,
 		CommitTime: wantCommitTime,
 	})
 	if err != nil {
@@ -665,25 +608,31 @@ func TestAmendAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Verify that HEAD was moved to a new commit.
-	if got.Hash == r1.Commit {
+	if got.SHA1() == r1.Commit {
 		t.Error("new HEAD = initial import")
 	}
-	// Verify all the other commit fields.
-	want := &CommitInfo{
-		Parents: []Hash{},
-		Author: User{
-			Name:  wantAuthorName,
-			Email: wantAuthorEmail,
-		},
+	// Verify the commit fields.
+	want := &object.Commit{
+		Tree: object.Tree{
+			{
+				Name:     "staged.txt",
+				Mode:     object.ModePlain,
+				ObjectID: blobSum(newContent),
+			},
+			{
+				Name:     "unstaged.txt",
+				Mode:     object.ModePlain,
+				ObjectID: blobSum(newContent),
+			},
+		}.SHA1(),
+		Parents:    []Hash{},
+		Author:     wantAuthor,
 		AuthorTime: wantAuthorTime,
-		Committer: User{
-			Name:  wantCommitterName,
-			Email: wantCommitterEmail,
-		},
+		Committer:  wantCommitter,
 		CommitTime: wantCommitTime,
 		Message:    wantMessage,
 	}
-	if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(CommitInfo{}, "Hash"), equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
+	if diff := cmp.Diff(want, got, equateTruncatedTime(time.Second), cmpopts.EquateEmpty()); diff != "" {
 		t.Errorf("CommitInfo(ctx, \"HEAD\") diff (-want +got):\n%s", diff)
 	}
 	// Verify that HEAD is still pointing to main.
@@ -691,17 +640,5 @@ func TestAmendAll(t *testing.T) {
 		t.Error(err)
 	} else if head.Ref != "refs/heads/main" {
 		t.Errorf("HEAD ref = %s; want refs/heads/main", head.Ref)
-	}
-
-	// Verify contents of commit.
-	if got, err := catFile(ctx, env.g, "HEAD", "staged.txt"); err != nil {
-		t.Error(err)
-	} else if got != newContent {
-		t.Errorf("staged.txt @ HEAD = %q; want %q", got, newContent)
-	}
-	if got, err := catFile(ctx, env.g, "HEAD", "unstaged.txt"); err != nil {
-		t.Error(err)
-	} else if got != newContent {
-		t.Errorf("unstaged.txt @ HEAD = %q; want %q", got, newContent)
 	}
 }

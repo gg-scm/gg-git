@@ -16,17 +16,19 @@ package git
 
 import (
 	"context"
-	"crypto/sha1"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
+	"gg-scm.io/pkg/git/object"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
+
+var _ os.FileInfo = new(TreeEntry)
 
 func TestListTree(t *testing.T) {
 	gitPath, err := findGit()
@@ -51,11 +53,12 @@ func TestListTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	foo := &TreeEntry{
-		path:   "foo.txt",
-		typ:    "blob",
-		mode:   0644,
-		object: gitObjectHash("blob", []byte(dummyContent)),
-		size:   int64(len(dummyContent)),
+		size: int64(len(dummyContent)),
+		raw: object.TreeEntry{
+			Name:     "foo.txt",
+			Mode:     object.ModePlain,
+			ObjectID: blobSum(dummyContent),
+		},
 	}
 	if err := env.g.Run(ctx, "add", "foo.txt"); err != nil {
 		t.Fatal(err)
@@ -75,33 +78,44 @@ func TestListTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	baz := &TreeEntry{
-		path:   "bar/baz.txt",
-		typ:    "blob",
-		mode:   0644,
-		object: gitObjectHash("blob", []byte(dummyContent)),
-		size:   int64(len(dummyContent)),
+		size: int64(len(dummyContent)),
+		raw: object.TreeEntry{
+			Name:     "bar/baz.txt",
+			Mode:     object.ModePlain,
+			ObjectID: blobSum(dummyContent),
+		},
 	}
 	bar := &TreeEntry{
-		path: "bar",
-		typ:  "tree",
-		mode: os.ModeDir,
-		object: gitObjectHash("tree",
-			append(append([]byte(nil), "100644 baz.txt\x00"...), baz.object[:]...)),
+		raw: object.TreeEntry{
+			Name: "bar",
+			Mode: object.ModeDir,
+			ObjectID: object.Tree{
+				{
+					Name:     "baz.txt",
+					Mode:     object.ModePlain,
+					ObjectID: baz.Object(),
+				},
+			}.SHA1(),
+		},
 	}
 	mylink := &TreeEntry{
-		path:   "mylink",
-		typ:    "blob",
-		mode:   os.ModeSymlink,
-		object: gitObjectHash("blob", []byte("foo.txt")),
-		size:   int64(len("foo.txt")),
+		size: int64(len("foo.txt")),
+		raw: object.TreeEntry{
+			Name:     "mylink",
+			Mode:     object.ModeSymlink,
+			ObjectID: blobSum("foo.txt"),
+		},
 	}
 	if runtime.GOOS == "windows" {
+		mylink.raw.Mode = object.ModePlain
+		mylink.size = 0
 		mylink = &TreeEntry{
-			path:   "mylink",
-			typ:    "blob",
-			mode:   0644,
-			object: gitObjectHash("blob", nil),
-			size:   0,
+			size: 0,
+			raw: object.TreeEntry{
+				Name:     "mylink",
+				Mode:     object.ModePlain,
+				ObjectID: blobSum(""),
+			},
 		}
 	}
 	if err := env.g.Run(ctx, "add", filepath.Join("bar", "baz.txt"), "mylink"); err != nil {
@@ -122,10 +136,11 @@ func TestListTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	submod := &TreeEntry{
-		path:   "submod",
-		typ:    "commit",
-		mode:   os.ModeDir,
-		object: submodHead.Commit,
+		raw: object.TreeEntry{
+			Name:     "submod",
+			Mode:     object.ModeGitlink,
+			ObjectID: submodHead.Commit,
+		},
 	}
 	if err := env.g.Run(ctx, "submodule", "add", "./submod", "submod"); err != nil {
 		t.Fatal(err)
@@ -268,13 +283,10 @@ func TestListTree(t *testing.T) {
 	}
 }
 
-// gitObjectHash hashes an object in the same way that Git will store it on
-// disk. See https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
-func gitObjectHash(typ string, data []byte) Hash {
-	s := sha1.New()
-	fmt.Fprintf(s, "%s %d\x00", typ, len(data))
-	s.Write(data)
-	var h Hash
-	copy(h[:], s.Sum(nil))
-	return h
+func blobSum(s string) Hash {
+	sum, err := object.BlobSum(strings.NewReader(s), int64(len(s)))
+	if err != nil {
+		panic(err)
+	}
+	return sum
 }

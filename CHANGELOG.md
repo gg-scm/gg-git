@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  A new `packfile` package enables reading and writing the Git packfile format.
    ([#4](https://github.com/gg-scm/gg-git/issues/4))
 
+### Changed
+
+-  `*Git.CommitInfo` and `*Log.CommitInfo` now return an `*object.Commit`
+   instead of a `*git.CommitInfo`.
+-  `CommitOptions.Author`, `CommitOptions.Committer`, `AmendOptions.Author` and
+   `AmendOptions.Committer` are now type `object.User` instead of `git.User`.
+-  `*Git.Log` now calls `git rev-list --header` instead of `git log` and parses
+   the commits directly. This should be more performant, since Git can just pass
+   through the commit objects without parsing and reformatting them.
+-  `*TreeEntry.Mode` now sets both `os.ModeDir` and `os.ModeSymlink` for
+   submodules. This is more consistent with how Git treats these entries
+   internally.
+
+### Removed
+
+-  `git.CommitInfo` has been removed in favor of `object.Commit`. The latter has
+   mostly the same fields as the former, but does not contain a `Hash` field
+   because the hash can be computed in Go.
+-  `git.User` has been removed in favor of `object.User`. The latter is a string
+   rather than a struct so as to pass through user information from Git objects
+   verbatim.
+
 ## [0.7.3][] - 2020-12-13
 
 Version 0.7.3 releases minor fixes.
