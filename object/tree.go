@@ -280,6 +280,7 @@ func (m Mode) Format(f fmt.State, c rune) {
 }
 
 // FileMode converts the Git mode into an os.FileMode, if possible.
+// ModeGitlink will have both os.ModeDir and os.ModeSymlink set.
 func (m Mode) FileMode() (f os.FileMode, ok bool) {
 	perm := os.FileMode(m & 0o000777)
 	switch m & typeMask {
@@ -289,6 +290,8 @@ func (m Mode) FileMode() (f os.FileMode, ok bool) {
 		return os.ModeDir | perm, true
 	case ModeSymlink:
 		return os.ModeSymlink | perm, true
+	case ModeGitlink:
+		return os.ModeDir | os.ModeSymlink | perm, true
 	default:
 		return 0, false
 	}
