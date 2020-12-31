@@ -48,7 +48,7 @@ func (g *Git) CommitInfo(ctx context.Context, rev string) (*object.Commit, error
 
 	out, err := g.output(ctx, errPrefix, []string{
 		"cat-file",
-		"commit",
+		string(object.TypeCommit),
 		rev,
 	})
 	if err != nil {
@@ -223,8 +223,7 @@ func (l *Log) next() error {
 	if err := expectSum.UnmarshalText(fields[0]); err != nil {
 		return err
 	}
-	const commitType = "commit"
-	if !bytes.Equal(fields[1], []byte(commitType)) {
+	if !bytes.Equal(fields[1], []byte(object.TypeCommit)) {
 		return fmt.Errorf("commit %v: object is a %s", expectSum, fields[1])
 	}
 	size, err := strconv.Atoi(string(fields[2]))
@@ -246,7 +245,7 @@ func (l *Log) next() error {
 	// Validate commit object matches hash.
 	data = data[:len(data)-1]
 	l.hash.Reset()
-	l.hash.Write(object.AppendPrefix(nil, commitType, int64(size)))
+	l.hash.Write(object.AppendPrefix(nil, object.TypeCommit, int64(size)))
 	l.hash.Write(data)
 	var gotSum Hash
 	l.hash.Sum(gotSum[:0])

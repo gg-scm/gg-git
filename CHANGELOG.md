@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  `*TreeEntry.Mode` now sets both `os.ModeDir` and `os.ModeSymlink` for
    submodules. This is more consistent with how Git treats these entries
    internally.
+-  `*TreeEntry.ObjectType` now returns an `object.Type` instead of a `string`.
+   It is otherwise functionally identical.
 
 ### Removed
 

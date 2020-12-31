@@ -30,12 +30,28 @@ import (
 	"gg-scm.io/pkg/git/githash"
 )
 
+// Type is an enumeration of Git object types.
+type Type string
+
+// Object types.
+const (
+	TypeBlob   Type = "blob"
+	TypeTree   Type = "tree"
+	TypeCommit Type = "commit"
+	TypeTag    Type = "tag"
+)
+
+// IsValid reports whether typ is one of the known constants.
+func (typ Type) IsValid() bool {
+	return typ == TypeBlob || typ == TypeTree || typ == TypeCommit || typ == TypeTag
+}
+
 // BlobSum computes the Git SHA-1 object ID of the blob with the given content.
 // This includes the Git object prefix as part of the hash input. It returns an
 // error if the blob does not match the provided size in bytes.
 func BlobSum(r io.Reader, size int64) (githash.SHA1, error) {
 	h := sha1.New()
-	h.Write(AppendPrefix(nil, "blob", size))
+	h.Write(AppendPrefix(nil, TypeBlob, size))
 	n, err := io.Copy(h, r)
 	if err != nil {
 		return githash.SHA1{}, fmt.Errorf("hash git blob: %w", err)
@@ -50,7 +66,7 @@ func BlobSum(r io.Reader, size int64) (githash.SHA1, error) {
 
 // AppendPrefix appends a Git object prefix (e.g. "blob 42\x00")
 // to a byte slice.
-func AppendPrefix(dst []byte, typ string, n int64) []byte {
+func AppendPrefix(dst []byte, typ Type, n int64) []byte {
 	dst = append(dst, typ...)
 	dst = append(dst, ' ')
 	dst = strconv.AppendInt(dst, n, 10)

@@ -25,9 +25,9 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
+	"gg-scm.io/pkg/git/object"
 	"gg-scm.io/pkg/git/packfile"
 )
 
@@ -95,7 +95,7 @@ func firstCommit() (err error) {
 	if _, err := io.WriteString(w, blobContent); err != nil {
 		return err
 	}
-	blobHash := hashObject("blob", []byte(blobContent))
+	blobHash := hashObject(object.TypeBlob, []byte(blobContent))
 	fmt.Fprintf(os.Stderr, "blob = %02x\n", blobHash[:])
 
 	treeBuf := []byte("100644 hello.txt\x00")
@@ -110,7 +110,7 @@ func firstCommit() (err error) {
 	if _, err := w.Write(treeBuf); err != nil {
 		return err
 	}
-	treeHash := hashObject("tree", treeBuf)
+	treeHash := hashObject(object.TypeTree, treeBuf)
 	fmt.Fprintf(os.Stderr, "tree = %02x\n", treeHash[:])
 
 	commitBuf := new(bytes.Buffer)
@@ -127,7 +127,7 @@ func firstCommit() (err error) {
 	if err != nil {
 		return err
 	}
-	commitHash := hashObject("commit", commitBuf.Bytes())
+	commitHash := hashObject(object.TypeCommit, commitBuf.Bytes())
 	fmt.Fprintf(os.Stderr, "commit = %02x\n", commitHash[:])
 	if _, err := io.Copy(w, commitBuf); err != nil {
 		return err
@@ -182,7 +182,7 @@ func deltaOffset() (err error) {
 	}
 	fmt.Fprintf(os.Stderr, "deltaObjectOffset = %#x\n", deltaObjectOffset)
 
-	blobHash := hashObject("blob", []byte(blobContent))
+	blobHash := hashObject(object.TypeBlob, []byte(blobContent))
 	fmt.Fprintf(os.Stderr, "blob = %02x\n", blobHash[:])
 	return nil
 }
@@ -207,7 +207,7 @@ func objectOffset() (err error) {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "baseOffset = %#x\n", baseOffset)
-	baseBlobHash := hashObject("blob", []byte(baseContent))
+	baseBlobHash := hashObject(object.TypeBlob, []byte(baseContent))
 	fmt.Fprintf(os.Stderr, "base blob = %02x\n", baseBlobHash)
 
 	deltaContent := []byte{
@@ -235,7 +235,7 @@ func objectOffset() (err error) {
 	}
 	fmt.Fprintf(os.Stderr, "deltaObjectOffset = %#x\n", deltaObjectOffset)
 
-	blobHash := hashObject("blob", []byte(blobContent))
+	blobHash := hashObject(object.TypeBlob, []byte(blobContent))
 	fmt.Fprintf(os.Stderr, "blob = %02x\n", blobHash[:])
 	return nil
 }
@@ -328,17 +328,8 @@ func tooShort() (err error) {
 	return nil
 }
 
-// appendObjectPrefix appends the Git object prefix to a byte buffer.
-func appendObjectPrefix(dst []byte, typ string, n int64) []byte {
-	dst = append(dst, typ...)
-	dst = append(dst, ' ')
-	dst = strconv.AppendInt(dst, n, 10)
-	dst = append(dst, 0)
-	return dst
-}
-
-func hashObject(typ string, data []byte) [sha1.Size]byte {
-	buf := appendObjectPrefix(nil, typ, int64(len(data)))
+func hashObject(typ object.Type, data []byte) [sha1.Size]byte {
+	buf := object.AppendPrefix(nil, typ, int64(len(data)))
 	buf = append(buf, data...)
 	return sha1.Sum(buf)
 }

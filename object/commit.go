@@ -160,7 +160,7 @@ func (c *Commit) SHA1() githash.SHA1 {
 	if err != nil {
 		panic(err)
 	}
-	h.Write(AppendPrefix(nil, "commit", int64(len(s))))
+	h.Write(AppendPrefix(nil, TypeCommit, int64(len(s))))
 	h.Write(s)
 	var arr githash.SHA1
 	h.Sum(arr[:0])

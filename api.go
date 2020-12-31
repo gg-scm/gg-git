@@ -199,16 +199,15 @@ func (ent *TreeEntry) IsDir() bool { return ent.raw.Mode.IsDir() }
 // Sys returns nil. It exists purely to satisfy the os.FileInfo interface.
 func (ent *TreeEntry) Sys() interface{} { return nil }
 
-// ObjectType returns the file's Git object type. Possible values are "blob",
-// "tree", or "commit".
-func (ent *TreeEntry) ObjectType() string {
+// ObjectType returns the file's Git object type.
+func (ent *TreeEntry) ObjectType() object.Type {
 	switch ent.raw.Mode {
 	case object.ModeGitlink:
-		return "commit"
+		return object.TypeCommit
 	case object.ModeDir:
-		return "tree"
+		return object.TypeTree
 	default:
-		return "blob"
+		return object.TypeBlob
 	}
 }
 
@@ -310,7 +309,7 @@ func parseTreeEntry(out string) (_ *TreeEntry, trail string, _ error) {
 		return nil, trail, fmt.Errorf("%s: mode: %v unsupported", ent.raw.Name, ent.raw.Mode)
 	}
 
-	if got, expect := parts[1], ent.ObjectType(); got != expect {
+	if got, expect := object.Type(parts[1]), ent.ObjectType(); got != expect {
 		return nil, trail, fmt.Errorf("%s: object: type is %q (expected %q based on mode %v)", ent.raw.Name, got, expect, ent.raw.Mode)
 	}
 	ent.raw.ObjectID, err = ParseHash(parts[2])
@@ -345,7 +344,7 @@ func (g *Git) Cat(ctx context.Context, rev string, path TopPath) (io.ReadCloser,
 	}
 	stderr := new(bytes.Buffer)
 	stdout, err := StartPipe(ctx, g.runner, &Invocation{
-		Args:   []string{"cat-file", "blob", rev + ":" + path.String()},
+		Args:   []string{"cat-file", string(object.TypeBlob), rev + ":" + path.String()},
 		Dir:    g.dir,
 		Stderr: &limitWriter{w: stderr, n: errorOutputLimit},
 	})
@@ -1008,7 +1007,7 @@ func (g *Git) NewBranch(ctx context.Context, name string, opts BranchOptions) er
 // repository. This is sometimes useful as a diff comparison target.
 func (g *Git) NullTreeHash(ctx context.Context) (Hash, error) {
 	const errPrefix = "git hash-object"
-	out, err := g.output(ctx, errPrefix, []string{"hash-object", "-t", "tree", "--stdin"})
+	out, err := g.output(ctx, errPrefix, []string{"hash-object", "-t", string(object.TypeTree), "--stdin"})
 	if err != nil {
 		return Hash{}, err
 	}

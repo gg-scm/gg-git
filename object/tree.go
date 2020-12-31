@@ -94,7 +94,7 @@ func (tree Tree) SHA1() githash.SHA1 {
 		panic(err)
 	}
 	h := sha1.New()
-	h.Write(AppendPrefix(nil, "tree", int64(len(buf))))
+	h.Write(AppendPrefix(nil, TypeTree, int64(len(buf))))
 	h.Write(buf)
 	var arr githash.SHA1
 	h.Sum(arr[:0])
