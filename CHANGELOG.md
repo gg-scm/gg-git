@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  `CommitOptions.Author`, `CommitOptions.Committer`, `AmendOptions.Author` and
    `AmendOptions.Committer` are now type `object.User` instead of `git.User`.
 -  `*Git.Log` now calls `git rev-list | git cat-file` instead of `git log` and
-   parses the commits directly.
+   parses the commits directly. One slight semantic change: if `HEAD` does not
+   exist (an empty repository), then `*Log.Close` returns an error.
 -  `*TreeEntry.Mode` now sets both `os.ModeDir` and `os.ModeSymlink` for
    submodules. This is more consistent with how Git treats these entries
    internally.

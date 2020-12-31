@@ -541,6 +541,35 @@ func TestLog(t *testing.T) {
 	}
 }
 
+func TestLog_EmptyRepo(t *testing.T) {
+	gitPath, err := findGit()
+	if err != nil {
+		t.Skip("git not found:", err)
+	}
+	ctx := context.Background()
+	env, err := newTestEnv(ctx, gitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer env.cleanup()
+
+	if err := env.g.Init(ctx, "."); err != nil {
+		t.Fatal(err)
+	}
+	log, err := env.g.Log(ctx, LogOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log.Next() {
+		t.Error("Log has object:", log.CommitInfo())
+	}
+	err = log.Close()
+	if err == nil {
+		t.Fatal("Close did not return error")
+	}
+	t.Log("Close:", err)
+}
+
 func TestLog_NoWalk(t *testing.T) {
 	gitPath, err := findGit()
 	if err != nil {

@@ -118,7 +118,7 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (_ *Log, err error) {
 		args = append(args, "--no-walk=sorted")
 	}
 	if len(opts.Revs) == 0 {
-		args = append(args, "HEAD")
+		args = append(args, Head.String())
 	} else {
 		args = append(args, opts.Revs...)
 	}
