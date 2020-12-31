@@ -167,6 +167,15 @@ func (c *Commit) SHA1() githash.SHA1 {
 	return arr
 }
 
+// Summary returns the first line of the message.
+func (c *Commit) Summary() string {
+	i := strings.IndexByte(c.Message, '\n')
+	if i == -1 {
+		return c.Message
+	}
+	return c.Message[:i]
+}
+
 func consumeString(src []byte, s string) (_ []byte, ok bool) {
 	if len(src) < len(s) {
 		return src, false
