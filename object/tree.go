@@ -50,7 +50,11 @@ func (tree Tree) MarshalBinary() ([]byte, error) {
 		if i > 0 && !tree.Less(i-1, i) {
 			return nil, fmt.Errorf("marshal git tree: not sorted")
 		}
-		dst = ent.appendTo(dst)
+		var err error
+		dst, err = ent.appendTo(dst)
+		if err != nil {
+			return nil, fmt.Errorf("marshal git tree: %w", err)
+		}
 	}
 	return dst, nil
 }
@@ -178,13 +182,16 @@ func parseTreeEntry(src []byte) (_ *TreeEntry, tail []byte, _ error) {
 }
 
 // appendTo formats the entry in the manner Git expects.
-func (ent *TreeEntry) appendTo(dst []byte) []byte {
+func (ent *TreeEntry) appendTo(dst []byte) ([]byte, error) {
+	if strings.Contains(ent.Name, "\x00") {
+		return dst, fmt.Errorf("%q contains NUL", ent.Name)
+	}
 	dst = strconv.AppendUint(dst, uint64(ent.Mode), 8)
 	dst = append(dst, ' ')
 	dst = append(dst, ent.Name...)
 	dst = append(dst, 0)
 	dst = append(dst, ent.ObjectID[:]...)
-	return dst
+	return dst, nil
 }
 
 // String formats the entry in an ASCII-clean format similar to the Git tree

@@ -130,26 +130,34 @@ func (c *Commit) UnmarshalText(data []byte) error {
 
 // MarshalText serializes a commit into the Git object format.
 func (c *Commit) MarshalText() ([]byte, error) {
-	if strings.Contains(string(c.Author), "\n") {
-		return nil, fmt.Errorf("marshal git commit: author %q contains newline", c.Author)
-	}
-	if strings.Contains(string(c.Committer), "\n") {
-		return nil, fmt.Errorf("marshal git commit: committer %q contains newline", c.Committer)
-	}
-
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "tree %x\n", c.Tree)
 	for _, par := range c.Parents {
 		fmt.Fprintf(buf, "parent %x\n", par)
 	}
-	fmt.Fprintf(buf, "author %s %d %s\n", c.Author, c.AuthorTime.Unix(), c.AuthorTime.Format("-0700"))
-	fmt.Fprintf(buf, "committer %s %d %s\n", c.Committer, c.CommitTime.Unix(), c.CommitTime.Format("-0700"))
+	if err := writeUser(buf, "author", c.Author, c.AuthorTime); err != nil {
+		return nil, fmt.Errorf("marshal git commit: %w", err)
+	}
+	if err := writeUser(buf, "committer", c.Committer, c.CommitTime); err != nil {
+		return nil, fmt.Errorf("marshal git commit: %w", err)
+	}
 	if err := writeGPGSignature(buf, c.GPGSignature); err != nil {
 		return nil, fmt.Errorf("marshal git commit: %w", err)
 	}
 	buf.WriteString("\n")
 	buf.WriteString(c.Message)
 	return buf.Bytes(), nil
+}
+
+func writeUser(w io.Writer, name string, u User, t time.Time) error {
+	if !isSafeForHeader(string(u)) {
+		return fmt.Errorf("%s: %q contains unsafe characters", name, u)
+	}
+	_, err := fmt.Fprintf(w, "%s %s %d %s\n", name, u, t.Unix(), t.Format("-0700"))
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
 }
 
 // SHA1 computes the SHA-1 hash of the commit object. This is commonly known as
@@ -314,8 +322,14 @@ func MakeUser(name, email string) (User, error) {
 	if strings.Contains(name, "<") {
 		return "", fmt.Errorf("make user: name %q contains '<'", name)
 	}
+	if !isSafeForHeader(name) {
+		return "", fmt.Errorf("make user: name %q contains unsafe characters", name)
+	}
 	if strings.Contains(email, ">") {
 		return "", fmt.Errorf("make user: email %q contains '>'", email)
+	}
+	if !isSafeForHeader(email) {
+		return "", fmt.Errorf("make user: email %q contains unsafe characters", name)
 	}
 	if name == "" {
 		return User("<" + email + ">"), nil
@@ -352,4 +366,10 @@ func (u User) Name() string {
 func (u User) Email() string {
 	_, email := u.split()
 	return email
+}
+
+// isSafeForHeader reports whether s is safe to be included as an element of an
+// object header.
+func isSafeForHeader(s string) bool {
+	return !strings.ContainsAny(s, "\x00\n")
 }

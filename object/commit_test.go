@@ -128,9 +128,7 @@ func TestParseCommit(t *testing.T) {
 			if err != nil {
 				t.Error("Error:", err)
 			}
-			diff := cmp.Diff(test.parsed, got,
-				cmpopts.EquateEmpty(),
-				cmp.AllowUnexported(Commit{}))
+			diff := cmp.Diff(test.parsed, got, cmpopts.EquateEmpty())
 			if diff != "" {
 				t.Errorf("commit (-want +got):\n%s", diff)
 			}
