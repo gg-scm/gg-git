@@ -60,6 +60,7 @@ jobs:
           go test \
             -mod=readonly \
             -v \
+            -race \
             ./...
       env:
         GO111MODULE: on
@@ -87,6 +88,7 @@ jobs:
           go test \
             -mod=readonly \
             -v \
+            -race \
             ./...
       env:
         GO111MODULE: on
@@ -105,6 +107,6 @@ jobs:
       env:
         GO111MODULE: on
     - name: Run tests
-      run: go test -mod=readonly -v ./...
+      run: go test -mod=readonly -v -race ./...
       env:
         GO111MODULE: on
