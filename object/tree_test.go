@@ -40,6 +40,11 @@ var treeTests = []struct {
 	parsed Tree
 }{
 	{
+		name:   "Empty",
+		id:     hashLiteral("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+		parsed: Tree{},
+	},
+	{
 		name: "SingleFile",
 		id:   hashLiteral("a47995a165e75bf2a04b3d4165ff850449dbc542"),
 		parsed: Tree{
@@ -264,8 +269,8 @@ func TestMode(t *testing.T) {
 			mode:       ModeGitlink,
 			isRegular:  false,
 			isDir:      false,
-			fileMode:   0,
-			fileModeOK: false,
+			fileMode:   os.ModeDir | os.ModeSymlink,
+			fileModeOK: true,
 			string:     "160000",
 			octal:      "160000",
 			hex:        "e000",
