@@ -170,11 +170,15 @@ func TestUser(t *testing.T) {
 		email string
 	}{
 		{u: "", name: "", email: ""},
+		{u: "<>", name: "", email: ""},
+		{u: " <>", name: "", email: ""},
 		{u: "Octocat", name: "Octocat", email: ""},
 		{u: "Octocat <foo@example.com>", name: "Octocat", email: "foo@example.com"},
 		{u: "<foo@example.com>", name: "", email: "foo@example.com"},
 		{u: " <foo@example.com>", name: "", email: "foo@example.com"},
 		{u: "Octocat :>", name: "Octocat :>", email: ""},
+		{u: "Octocat<", name: "Octocat<", email: ""},
+		{u: "Octocat> <bar> >", name: "Octocat>", email: "bar"},
 	}
 	for _, test := range tests {
 		if got := test.u.Name(); got != test.name {
@@ -182,6 +186,44 @@ func TestUser(t *testing.T) {
 		}
 		if got := test.u.Email(); got != test.email {
 			t.Errorf("User(%q).Email() = %q; want %q", test.u, got, test.email)
+		}
+	}
+}
+
+func TestMakeUser(t *testing.T) {
+	tests := []struct {
+		name    string
+		email   string
+		want    User
+		wantErr bool
+	}{
+		{name: "", email: "", want: "<>"},
+		{name: "Octocat", email: "", want: "Octocat <>"},
+		{name: "Octocat", email: "octocat@example.com", want: "Octocat <octocat@example.com>"},
+		{name: "", email: "octocat@example.com", want: "<octocat@example.com>"},
+		{name: "", email: ">", wantErr: true},
+		{name: "", email: "<", want: "<<>"},
+		{name: "<", email: "", wantErr: true},
+		{name: ">", email: "", want: "> <>"},
+		{name: " foo ", email: "", wantErr: true},
+	}
+	for _, test := range tests {
+		got, err := MakeUser(test.name, test.email)
+		if got != test.want || (err != nil) != test.wantErr {
+			wantErr := "<nil>"
+			if test.wantErr {
+				wantErr = "<error>"
+			}
+			t.Errorf("MakeUser(%q, %q) = %q, %v; want %q, %s", test.name, test.email, got, err, test.want, wantErr)
+		}
+		if test.wantErr {
+			continue
+		}
+		if got := test.want.Name(); got != test.name {
+			t.Errorf("User(%q).Name() = %q; want %q", test.want, got, test.name)
+		}
+		if got := test.want.Email(); got != test.email {
+			t.Errorf("User(%q).Email() = %q; want %q", test.want, got, test.email)
 		}
 	}
 }

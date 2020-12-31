@@ -302,19 +302,43 @@ func writeGPGSignature(w io.Writer, sig []byte) error {
 	return nil
 }
 
-// User identifies an author or committer.
+// User identifies an author or committer as a string like
+// "Octocat <octocat@example.com>".
 type User string
 
+// MakeUser constructs a User string from a name and an email address.
+func MakeUser(name, email string) (User, error) {
+	if name != strings.TrimSpace(name) {
+		return "", fmt.Errorf("make user: name %q has surrounding whitespace", name)
+	}
+	if strings.Contains(name, "<") {
+		return "", fmt.Errorf("make user: name %q contains '<'", name)
+	}
+	if strings.Contains(email, ">") {
+		return "", fmt.Errorf("make user: email %q contains '>'", email)
+	}
+	if name == "" {
+		return User("<" + email + ">"), nil
+	}
+	return User(name + " <" + email + ">"), nil
+}
+
 func (u User) split() (name, email string) {
-	if !strings.HasSuffix(string(u), ">") {
+	// Reference implementation is split_ident_line:
+	// https://github.com/git/git/blob/9c31b19dd00981fcea435de1cd05eab179039a8d/ident.c#L271-L346
+
+	nameEnd := strings.IndexByte(string(u), '<')
+	if nameEnd == -1 {
 		return strings.TrimSpace(string(u)), ""
 	}
-	i := strings.LastIndexByte(string(u), '<')
-	if i == -1 {
+	emailStart := nameEnd + 1
+	emailEnd := strings.IndexByte(string(u[emailStart:]), '>')
+	if emailEnd == -1 {
 		return strings.TrimSpace(string(u)), ""
 	}
-	name = strings.TrimSpace(string(u[:i]))
-	email = string(u[i+1 : len(u)-1])
+	emailEnd += emailStart
+	name = strings.TrimSpace(string(u[:nameEnd]))
+	email = string(u[emailStart:emailEnd])
 	return
 }
 
