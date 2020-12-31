@@ -408,7 +408,7 @@ func TestLog(t *testing.T) {
 	if err := env.g.Add(ctx, []Pathspec{"bar.txt"}, AddOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	const wantMessage1 = "first parent\n"
+	const wantMessage1 = "first parent\nno trailing newline"
 	wantTime1 := time.Date(2018, time.February, 21, 15, 49, 58, 0, time.FixedZone("UTC-8", -8*60*60))
 	if err := env.g.Commit(ctx, wantMessage1, commitOpts(wantTime1)); err != nil {
 		t.Fatal(err)
@@ -423,7 +423,7 @@ func TestLog(t *testing.T) {
 	if err := env.g.Add(ctx, []Pathspec{"baz.txt"}, AddOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	const wantMessage2 = "second parent\n"
+	const wantMessage2 = "\t second parent\n"
 	wantTime2 := time.Date(2018, time.February, 21, 17, 7, 53, 0, time.FixedZone("UTC-8", -8*60*60))
 	if err := env.g.Commit(ctx, wantMessage2, commitOpts(wantTime2)); err != nil {
 		t.Fatal(err)
@@ -652,4 +652,103 @@ func equateTruncatedTime(d time.Duration) cmp.Option {
 	return cmp.Comparer(func(t1, t2 time.Time) bool {
 		return t1.Truncate(d).Equal(t2.Truncate(d))
 	})
+}
+
+func TestMuxWriter(t *testing.T) {
+	tests := []struct {
+		name      string
+		bufSize   int
+		writes    []string
+		flush     bool
+		want      string
+		wantError bool
+	}{
+		{
+			name: "Empty",
+			want: "",
+		},
+		{
+			name:   "SingleLine/InOneWrite",
+			writes: []string{"foo\n"},
+			want:   "foo\n",
+		},
+		{
+			name:   "SingleLine/ByteAtATime",
+			writes: []string{"f", "o", "o", "\n"},
+			want:   "foo\n",
+		},
+		{
+			name:   "TrailingData/WithoutFlush",
+			writes: []string{"foo\nbar"},
+			want:   "foo\n",
+		},
+		{
+			name:   "TrailingData/WithFlush",
+			writes: []string{"foo\nbar"},
+			flush:  true,
+			want:   "foo\nbar",
+		},
+		{
+			name:      "TrailingData/LargerThanBuffer",
+			bufSize:   2,
+			writes:    []string{"foo\nbar"},
+			flush:     true,
+			want:      "foo\n",
+			wantError: true,
+		},
+		{
+			name:    "LineLargerThanBuffer/InOneWrite",
+			bufSize: 2,
+			writes:  []string{"Hi!\n"},
+			want:    "Hi!\n",
+		},
+		{
+			name:      "LineLargerThanBuffer/ByteAtATime",
+			bufSize:   2,
+			writes:    []string{"H", "i", "!"},
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := new(strings.Builder)
+			defer func() {
+				if got.String() != test.want {
+					t.Errorf("got = %q; want %q", got, test.want)
+				}
+			}()
+			mux := &muxWriter{w: got}
+			stream := mux.newHandle()
+			if test.bufSize != 0 {
+				stream.buf = make([]byte, 0, test.bufSize)
+			}
+			gotError := false
+			for i, data := range test.writes {
+				n, err := stream.Write([]byte(data))
+				if err != nil {
+					t.Logf("writes[%d] error: %v", i, err)
+					gotError = true
+					if !test.wantError || i < len(test.writes)-1 {
+						t.Fail()
+					}
+					break
+				}
+				if n != len(data) {
+					t.Errorf("writes[%d] n = %d; want %d", i, n, len(data))
+				}
+			}
+			if test.flush {
+				if err := stream.Flush(); err != nil {
+					t.Log("Flush:", err)
+					gotError = true
+					if !test.wantError {
+						t.Fail()
+					}
+				}
+			}
+			if !gotError && test.wantError {
+				t.Error("No error returned")
+			}
+		})
+	}
 }

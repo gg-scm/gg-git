@@ -19,9 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    instead of a `*git.CommitInfo`.
 -  `CommitOptions.Author`, `CommitOptions.Committer`, `AmendOptions.Author` and
    `AmendOptions.Committer` are now type `object.User` instead of `git.User`.
--  `*Git.Log` now calls `git rev-list --header` instead of `git log` and parses
-   the commits directly. This should be more performant, since Git can just pass
-   through the commit objects without parsing and reformatting them.
+-  `*Git.Log` now calls `git rev-list | git cat-file` instead of `git log` and
+   parses the commits directly.
 -  `*TreeEntry.Mode` now sets both `os.ModeDir` and `os.ModeSymlink` for
    submodules. This is more consistent with how Git treats these entries
    internally.

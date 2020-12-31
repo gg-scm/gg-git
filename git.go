@@ -530,6 +530,12 @@ type localPipe struct {
 	wait func() error
 }
 
+// WriteTo implements io.WriterTo by copying directly from the underlying reader.
+// This may result in efficiency gains in some scenarios.
+func (p localPipe) WriteTo(w io.Writer) (int64, error) {
+	return io.Copy(w, p.ReadCloser)
+}
+
 func (p localPipe) Close() error {
 	closeErr := p.ReadCloser.Close()
 	waitErr := p.wait()

@@ -18,10 +18,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
+	"strconv"
 	"strings"
+	"sync"
 
 	"gg-scm.io/pkg/git/object"
 )
@@ -85,18 +89,19 @@ type LogOptions struct {
 	NoWalk bool
 }
 
+const logErrPrefix = "git rev-list | git cat-file --batch"
+
 // Log starts fetching information about a set of commits. The context's
 // deadline and cancelation will apply to the entire read from the Log.
-func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
+func (g *Git) Log(ctx context.Context, opts LogOptions) (_ *Log, err error) {
 	// TODO(someday): Add an example for this method.
 
-	const errPrefix = "git rev-list"
 	for _, rev := range opts.Revs {
 		if err := validateRev(rev); err != nil {
-			return nil, fmt.Errorf("%s: %w", errPrefix, err)
+			return nil, fmt.Errorf("%s: %w", logErrPrefix, err)
 		}
 	}
-	args := []string{"rev-list", "--header"}
+	args := []string{"rev-list"}
 	if opts.MaxParents > 0 || opts.AllowZeroMaxParents {
 		args = append(args, fmt.Sprintf("--max-parents=%d", opts.MaxParents))
 	}
@@ -121,35 +126,52 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	stderr := new(bytes.Buffer)
-	pipe, err := StartPipe(ctx, g.runner, &Invocation{
+	stderrMux := &muxWriter{w: &limitWriter{w: stderr, n: 4096}}
+
+	revListStderr := stderrMux.newHandle()
+	revListPipe, err := StartPipe(ctx, g.runner, &Invocation{
 		Args:   args,
 		Dir:    g.dir,
-		Stderr: &limitWriter{w: stderr, n: 4096},
+		Stderr: revListStderr,
 	})
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("%s: %w", errPrefix, err)
+		return nil, fmt.Errorf("%s: %w", logErrPrefix, err)
 	}
 
-	r := bufio.NewReaderSize(pipe, 1<<20 /* 1 MiB */)
-	if _, err := r.Peek(1); err != nil && !errors.Is(err, io.EOF) {
+	catFileStderr := stderrMux.newHandle()
+	catFilePipe, err := StartPipe(ctx, g.runner, &Invocation{
+		Args:   []string{"cat-file", "--batch"},
+		Dir:    g.dir,
+		Stdin:  revListPipe,
+		Stderr: catFileStderr,
+	})
+	if err != nil {
 		cancel()
-		waitErr := pipe.Close()
-		return nil, commandError(errPrefix, waitErr, stderr.Bytes())
+		revListPipe.Close()
+		return nil, fmt.Errorf("%s: %w", logErrPrefix, err)
 	}
+
 	return &Log{
-		r:      r,
+		r:      bufio.NewReaderSize(catFilePipe, 1<<20 /* 1 MiB */),
+		stderr: stderr,
 		cancel: cancel,
-		close:  pipe,
+		hash:   sha1.New(),
+		closers: [...]io.Closer{
+			pipeStreamCloser{catFilePipe, catFileStderr},
+			pipeStreamCloser{revListPipe, revListStderr},
+		},
 	}, nil
 }
 
-// Log is an open handle to a `git rev-list` subprocess. Closing the Log
+// Log is an open handle to a `git cat-file --batch` subprocess. Closing the Log
 // stops the subprocess.
 type Log struct {
-	r      *bufio.Reader
-	cancel context.CancelFunc
-	close  io.Closer
+	r       *bufio.Reader
+	stderr  *bytes.Buffer
+	hash    hash.Hash
+	cancel  context.CancelFunc
+	closers [2]io.Closer
 
 	scanErr  error
 	scanDone bool
@@ -161,90 +183,83 @@ func (l *Log) Next() bool {
 	if l.scanDone {
 		return false
 	}
-
-	// Continue growing buffer until we've fit a log entry.
-	end := -1
-	for n := l.r.Buffered(); n < l.r.Size(); {
-		data, err := l.r.Peek(n)
-		end = bytes.IndexByte(data, 0)
-		if end != -1 {
-			break
-		}
-		if err != nil {
-			switch {
-			case err == io.EOF && l.r.Buffered() == 0:
-				l.abort(nil)
-			case err == io.EOF && l.r.Buffered() > 0:
-				l.abort(io.ErrUnexpectedEOF)
-			default:
-				l.abort(err)
-			}
-			return false
-		}
-		if l.r.Buffered() > n {
-			n = l.r.Buffered()
-		} else {
-			n++
-		}
-	}
-	if end == -1 {
-		l.abort(bufio.ErrBufferFull)
-		return false
-	}
-	data, err := l.r.Peek(end)
+	err := l.next()
 	if err != nil {
-		// Should already be buffered.
-		panic(err)
-	}
-
-	// Read the commit hash (first line).
-	firstLineEnd := bytes.IndexByte(data, '\n')
-	if firstLineEnd == -1 {
-		l.abort(fmt.Errorf("parse rev-list: missing line feed"))
+		l.r = nil
+		l.scanErr = err
+		if errors.Is(err, io.EOF) {
+			l.scanErr = nil
+		}
+		l.scanDone = true
+		l.info = nil
+		l.cancel()
 		return false
 	}
-	var expectSum Hash
-	if err := expectSum.UnmarshalText(data[:firstLineEnd]); err != nil {
-		l.abort(err)
-		return false
-	}
-
-	// Parse the commit.
-	info, err := object.ParseCommit(data[firstLineEnd+1 : end])
-	if err != nil {
-		l.abort(fmt.Errorf("commit %v: %w", expectSum, err))
-		return false
-	}
-	info.Message = cleanLogMessage(info.Message)
-	if info.SHA1() != expectSum {
-		l.abort(fmt.Errorf("commit %v: data does not match object ID", expectSum))
-		return false
-	}
-	if _, err := l.r.Discard(end + 1); err != nil {
-		// Should already be buffered.
-		panic(err)
-	}
-	l.info = info
 	return true
 }
 
-// cleanLogMessage removes the indents that `git rev-list` "helpfully" inserts
-// into the message, despite the man page claiming "the raw format shows the
-// entire commit exactly as stored in the commit object."
-func cleanLogMessage(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimPrefix(line, "    ")
+func (l *Log) next() error {
+	// Read object information.
+	// Reference: https://git-scm.com/docs/git-cat-file#_batch_output
+	line, err := l.r.ReadSlice('\n')
+	if len(line) == 0 && errors.Is(err, io.EOF) {
+		// Reached successful end. Wait for subprocesses to exit.
+		if err := l.close(); err != nil {
+			return err
+		}
+		return io.EOF
 	}
-	return strings.Join(lines, "\n")
-}
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	fields := bytes.Fields(line)
+	if len(fields) != 3 {
+		return fmt.Errorf("invalid object information line")
+	}
+	var expectSum Hash
+	if err := expectSum.UnmarshalText(fields[0]); err != nil {
+		return err
+	}
+	const commitType = "commit"
+	if !bytes.Equal(fields[1], []byte(commitType)) {
+		return fmt.Errorf("commit %v: object is a %s", expectSum, fields[1])
+	}
+	size, err := strconv.Atoi(string(fields[2]))
+	if err != nil {
+		return fmt.Errorf("commit %v: size: %w", expectSum, err)
+	}
+	if size < 0 {
+		return fmt.Errorf("commit %v: negative size", expectSum)
+	}
 
-func (l *Log) abort(e error) {
-	l.r = nil
-	l.scanErr = e
-	l.scanDone = true
-	l.info = nil
-	l.cancel()
+	// Read commit object.
+	data := make([]byte, size+1)
+	if _, err := io.ReadFull(l.r, data); err != nil {
+		return fmt.Errorf("commit %v: %w", expectSum, err)
+	}
+	if !bytes.HasSuffix(data, []byte("\n")) {
+		return fmt.Errorf("commit %v: does not end with newline", expectSum)
+	}
+	// Validate commit object matches hash.
+	data = data[:len(data)-1]
+	l.hash.Reset()
+	l.hash.Write(object.AppendPrefix(nil, commitType, int64(size)))
+	l.hash.Write(data)
+	var gotSum Hash
+	l.hash.Sum(gotSum[:0])
+	if gotSum != expectSum {
+		return fmt.Errorf("commit %v: data does not match object ID", expectSum)
+	}
+	// Parse commit.
+	info, err := object.ParseCommit(data)
+	if err != nil {
+		return fmt.Errorf("commit %v: %w", expectSum, err)
+	}
+	l.info = info
+	return nil
 }
 
 // CommitInfo returns the most recently scanned log entry.
@@ -256,10 +271,112 @@ func (l *Log) CommitInfo() *object.Commit {
 // Close ends the log subprocess and waits for it to finish.
 // Close returns an error if Next returned false due to a parse failure.
 func (l *Log) Close() error {
-	// Not safe to call multiple times, but interface for Close doesn't
-	// require this to be supported.
-
 	l.cancel()
-	l.close.Close() // Ignore error, since it's probably from interrupting.
+	l.close()         // Ignore error, since it's from interrupting.
+	l.scanDone = true // Bail early for future calls to Next.
 	return l.scanErr
+}
+
+func (l *Log) close() error {
+	var first error
+	for i, c := range l.closers {
+		if c == nil {
+			continue
+		}
+		if err := c.Close(); first == nil {
+			first = err
+		}
+		l.closers[i] = nil
+	}
+	if first != nil {
+		return commandError(logErrPrefix, first, l.stderr.Bytes())
+	}
+	return nil
+}
+
+// A muxWriter synchronizes access to a writer through a number of handles.
+type muxWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (mux *muxWriter) newHandle() *muxWriterStream {
+	return &muxWriterStream{
+		buf: make([]byte, 0, 1024),
+		mux: mux,
+	}
+}
+
+// A muxWriterStream is a single stream of lines being sent to the muxWriter.
+type muxWriterStream struct {
+	buf []byte
+	mux *muxWriter
+}
+
+func (stream *muxWriterStream) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	lastLF := bytes.LastIndexByte(data, '\n')
+	if lastLF == -1 {
+		// No newline; must buffer.
+		newBufSize := len(stream.buf) + len(data)
+		if newBufSize > cap(stream.buf) {
+			return 0, errors.New("line too long")
+		}
+		stream.buf = append(stream.buf, data...)
+		return len(data), nil
+	}
+	end := lastLF + 1
+
+	stream.mux.mu.Lock()
+	defer stream.mux.mu.Unlock()
+	if err := stream.flushLocked(); err != nil {
+		return 0, err
+	}
+	n, err := stream.mux.w.Write(data[:end])
+	if err != nil {
+		return n, err
+	}
+	trailing := data[end:]
+	if len(trailing) > cap(stream.buf) {
+		return n, errors.New("line too long")
+	}
+	stream.buf = append(stream.buf, trailing...)
+	return len(data), nil
+}
+
+func (stream *muxWriterStream) Flush() error {
+	stream.mux.mu.Lock()
+	defer stream.mux.mu.Unlock()
+	return stream.flushLocked()
+}
+
+func (stream *muxWriterStream) flushLocked() error {
+	if len(stream.buf) == 0 {
+		return nil
+	}
+	n, err := stream.mux.w.Write(stream.buf)
+	if n < len(stream.buf) {
+		// Move data to beginning to avoid dealing with buffer wraparound.
+		newBufSize := copy(stream.buf, stream.buf[n:])
+		stream.buf = stream.buf[:newBufSize]
+	} else {
+		stream.buf = stream.buf[:0]
+	}
+	return err
+}
+
+type pipeStreamCloser struct {
+	pipe   io.Closer
+	stream interface{ Flush() error }
+}
+
+func (c pipeStreamCloser) Close() error {
+	err := c.pipe.Close()
+	err2 := c.stream.Flush()
+	if err == nil {
+		err = err2
+	}
+	return err
 }
