@@ -331,6 +331,43 @@ func TestParseRev(t *testing.T) {
 	}
 }
 
+func BenchmarkParseRev(b *testing.B) {
+	gitPath, err := findGit()
+	if err != nil {
+		b.Skip("git not found:", err)
+	}
+	ctx := context.Background()
+	env, err := newTestEnv(ctx, gitPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer env.cleanup()
+
+	repoPath := env.root.FromSlash("repo")
+	if err := env.g.Init(ctx, repoPath); err != nil {
+		b.Fatal(err)
+	}
+	g := env.g.WithDir(repoPath)
+
+	const fileName = "foo.txt"
+	if err := env.root.Apply(filesystem.Write("repo/foo.txt", "Hello, World!\n")); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.Run(ctx, "add", fileName); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.Run(ctx, "commit", "-m", "first commit"); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := g.ParseRev(ctx, "HEAD"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestListRefs(t *testing.T) {
 	gitPath, err := findGit()
 	if err != nil {
