@@ -27,6 +27,7 @@ import (
 	"os/exec"
 
 	"gg-scm.io/pkg/git/githash"
+	"gg-scm.io/pkg/git/internal/pktline"
 )
 
 type Remote struct {
@@ -145,32 +146,26 @@ func (r *Remote) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, e
 	}
 
 	var commandBuf []byte
-	commandBuf = appendPacketLineString(commandBuf, "command=ls-refs\n")
-	commandBuf = appendDelimPacket(commandBuf)
-	commandBuf = appendPacketLineString(commandBuf, "symrefs\n")
+	commandBuf = pktline.AppendString(commandBuf, "command=ls-refs\n")
+	commandBuf = pktline.AppendDelim(commandBuf)
+	commandBuf = pktline.AppendString(commandBuf, "symrefs\n")
 	for _, prefix := range refPrefixes {
-		commandBuf = appendPacketLineString(commandBuf, "ref-prefix "+prefix+"\n")
+		commandBuf = pktline.AppendString(commandBuf, "ref-prefix "+prefix+"\n")
 	}
-	commandBuf = appendFlushPacket(commandBuf)
+	commandBuf = pktline.AppendFlush(commandBuf)
 	resp, err := r.impl.uploadPackV2(ctx, bytes.NewReader(commandBuf))
 	if err != nil {
 		return nil, fmt.Errorf("list refs for %s: %w", r.urlstr, err)
 	}
 	defer resp.Close()
 	var refs []*Ref
-	buf := make([]byte, maxPacketSize)
-	for {
-		ptype, n, err := readPacketLine(resp, buf)
+	respReader := pktline.NewReader(resp)
+	for respReader.Next() && respReader.Type() != pktline.Flush {
+		line, err := respReader.Text()
 		if err != nil {
 			return nil, fmt.Errorf("list refs for %s: parse response: %w", r.urlstr, err)
 		}
-		if ptype == flushPacket {
-			break
-		}
-		if ptype != dataPacket {
-			return nil, fmt.Errorf("list refs for %s: parse response: invalid packet from server", r.urlstr)
-		}
-		words := bytes.Fields(buf[:n])
+		words := bytes.Fields(line)
 		if len(words) < 2 {
 			return nil, fmt.Errorf("list refs for %s: parse response: invalid packet from server", r.urlstr)
 		}
@@ -185,6 +180,9 @@ func (r *Remote) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, e
 			}
 		}
 		refs = append(refs, ref)
+	}
+	if err := respReader.Err(); err != nil {
+		return nil, fmt.Errorf("list refs for %s: parse response: %w", r.urlstr, err)
 	}
 	return refs, nil
 }
@@ -225,34 +223,28 @@ func (caps v2Capabilities) supports(key string) bool {
 	return ok
 }
 
-func parseCapabilityAdvertisement(r io.Reader) (v2Capabilities, error) {
-	buf := make([]byte, maxPacketSize)
-	ptype, n, err := readPacketLine(r, buf)
-	if err != nil {
+func parseCapabilityAdvertisement(r *pktline.Reader) (v2Capabilities, error) {
+	r.Next()
+	if line, err := r.Text(); err != nil {
 		return nil, fmt.Errorf("parse capability advertisement: %w", err)
-	}
-	if ptype != dataPacket || !bytes.Equal(trimLF(buf[:n]), []byte("version 2")) {
-		return nil, fmt.Errorf("parse capability advertisement: not Git protocol version 2 (%q)", trimLF(buf[:n]))
+	} else if !bytes.Equal(line, []byte("version 2")) {
+		return nil, fmt.Errorf("parse capability advertisement: not Git protocol version 2 (%q)", line)
 	}
 	caps := make(v2Capabilities)
-	for {
-		ptype, n, err = readPacketLine(r, buf)
+	for r.Next() && r.Type() != pktline.Flush {
+		line, err := r.Text()
 		if err != nil {
 			return nil, fmt.Errorf("parse capability advertisement: %w", err)
 		}
-		if ptype == flushPacket {
-			break
-		}
-		if ptype != dataPacket {
-			return nil, fmt.Errorf("parse capability advertisement: invalid packet from server")
-		}
-		line := trimLF(buf[:n])
 		// TODO(soon): Verify that key and value have permitted characters.
 		k, v := line, []byte(nil)
 		if i := bytes.IndexByte(line, '='); i != -1 {
 			k, v = line[:i], line[i+1:]
 		}
 		caps[string(k)] = string(v)
+	}
+	if err := r.Err(); err != nil {
+		return nil, fmt.Errorf("parse capability advertisement: %w", err)
 	}
 	return caps, nil
 }

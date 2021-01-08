@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 
+	"gg-scm.io/pkg/git/internal/pktline"
 	"golang.org/x/sys/unix"
 )
 
@@ -58,7 +59,7 @@ func (r *fileRemote) uploadPackV2Capabilities(ctx context.Context) (v2Capabiliti
 	if err != nil {
 		return nil, fmt.Errorf("git-upload-pack --advertise-refs %s: %w", r.dir, err)
 	}
-	caps, err := parseCapabilityAdvertisement(out)
+	caps, err := parseCapabilityAdvertisement(pktline.NewReader(out))
 	if err != nil {
 		return nil, fmt.Errorf("git-upload-pack --advertise-refs %s: %w", r.dir, err)
 	}
@@ -157,7 +158,7 @@ func (conn *localReceivePackConn) CloseWrite() error {
 
 func (conn *localReceivePackConn) Close() error {
 	if !conn.wrote {
-		conn.stdin.Write(appendFlushPacket(nil))
+		conn.stdin.Write(pktline.AppendFlush(nil))
 	}
 	conn.stdin.Close()
 	if err := conn.c.Wait(); err != nil {

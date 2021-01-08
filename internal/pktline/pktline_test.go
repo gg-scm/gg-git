@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package client
+package pktline
 
 import (
 	"strings"
@@ -25,7 +25,7 @@ func TestReadPacketLine(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		typ     packetType
+		typ     Type
 		want    string
 		wantErr bool
 	}{
@@ -42,25 +42,25 @@ func TestReadPacketLine(t *testing.T) {
 		{
 			name:  "TextLF",
 			input: "0006a\n",
-			typ:   dataPacket,
+			typ:   Data,
 			want:  "a\n",
 		},
 		{
 			name:  "TextNoLF",
 			input: "0005a",
-			typ:   dataPacket,
+			typ:   Data,
 			want:  "a",
 		},
 		{
 			name:  "LongerString",
 			input: "000bfoobar\n",
-			typ:   dataPacket,
+			typ:   Data,
 			want:  "foobar\n",
 		},
 		{
 			name:  "Empty",
 			input: "0004",
-			typ:   dataPacket,
+			typ:   Data,
 			want:  "",
 		},
 		{
@@ -76,30 +76,31 @@ func TestReadPacketLine(t *testing.T) {
 		{
 			name:  "Flush",
 			input: "0000",
-			typ:   flushPacket,
+			typ:   Flush,
 		},
 		{
 			name:  "Delim",
 			input: "0001",
-			typ:   delimPacket,
+			typ:   Delim,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			p := make([]byte, maxPacketSize)
-			gotType, gotN, err := readPacketLine(strings.NewReader(test.input), p)
-			if err != nil {
+			r := NewReader(strings.NewReader(test.input))
+			r.Next()
+			if err := r.Err(); err != nil {
 				if !test.wantErr {
-					t.Errorf("readPacketLine(...): %v", err)
+					t.Errorf("r.Err() = %v", err)
 				}
 				return
 			}
-			got := string(p[:gotN])
+			gotType := r.Type()
+			got, bytesErr := r.Bytes()
 			if test.wantErr {
-				t.Fatalf("readPacketLine(...) typ=%v line=%q err=<nil>; want error", gotType, got)
+				t.Fatalf("r.Type()=%v r.Bytes()=%q,%v r.Err()=<nil>; want error", gotType, got, bytesErr)
 			}
-			if gotType != test.typ || got != test.want {
-				t.Errorf("readPacketLine(...) typ=%v line=%q; want typ=%v line=%q", gotType, got, test.typ, test.want)
+			if gotType != test.typ || (test.typ == Data && bytesErr != nil) || string(got) != test.want {
+				t.Errorf("r.Type()=%v r.Bytes()=%q,%v; want r.Type()=%v r.Bytes()=%q,...", gotType, got, bytesErr, test.typ, test.want)
 			}
 		})
 	}

@@ -23,6 +23,7 @@ import (
 	"io"
 
 	hash "gg-scm.io/pkg/git/githash"
+	"gg-scm.io/pkg/git/internal/pktline"
 )
 
 // FetchOptions holds the optional arguments to Fetch.
@@ -48,21 +49,21 @@ func (r *Remote) Fetch(ctx context.Context, dst io.Writer, want hash.SHA1, opts 
 	}
 
 	var commandBuf []byte
-	commandBuf = appendPacketLineString(commandBuf, "command=fetch\n")
-	commandBuf = appendDelimPacket(commandBuf)
-	commandBuf = appendPacketLineString(commandBuf, "want "+want.String()+"\n")
+	commandBuf = pktline.AppendString(commandBuf, "command=fetch\n")
+	commandBuf = pktline.AppendDelim(commandBuf)
+	commandBuf = pktline.AppendString(commandBuf, "want "+want.String()+"\n")
 	for _, have := range opts.Have {
-		commandBuf = appendPacketLineString(commandBuf, "have "+have.String()+"\n")
+		commandBuf = pktline.AppendString(commandBuf, "have "+have.String()+"\n")
 	}
 	// TODO(soon): Add commit negotiation option.
-	commandBuf = appendPacketLineString(commandBuf, "done\n")
+	commandBuf = pktline.AppendString(commandBuf, "done\n")
 	if opts.IncludeTag {
-		commandBuf = appendPacketLineString(commandBuf, "include-tag\n")
+		commandBuf = pktline.AppendString(commandBuf, "include-tag\n")
 	}
 	if opts.OnProgress == nil {
-		commandBuf = appendPacketLineString(commandBuf, "no-progress\n")
+		commandBuf = pktline.AppendString(commandBuf, "no-progress\n")
 	}
-	commandBuf = appendFlushPacket(commandBuf)
+	commandBuf = pktline.AppendFlush(commandBuf)
 	resp, err := r.impl.uploadPackV2(ctx, bytes.NewReader(commandBuf))
 	if err != nil {
 		return fmt.Errorf("fetch %s: %w", r.urlstr, err)
@@ -70,53 +71,59 @@ func (r *Remote) Fetch(ctx context.Context, dst io.Writer, want hash.SHA1, opts 
 	defer resp.Close()
 
 	// packfile section
-	pbuf := make([]byte, 100)
-	ptype, n, err := readPacketLine(resp, pbuf)
-	if err != nil {
+	respReader := pktline.NewReader(resp)
+	respReader.Next()
+	if line, err := respReader.Text(); err != nil {
 		return fmt.Errorf("fetch %s: parse response: %w", r.urlstr, err)
+	} else if !bytes.Equal(line, []byte("packfile")) {
+		return fmt.Errorf("fetch %s: parse response: unknown section %q", r.urlstr, line)
 	}
-	if ptype != dataPacket {
-		return fmt.Errorf("fetch %s: parse response: unexpected flush", r.urlstr)
-	}
-	if got := string(trimLF(pbuf[:n])); got != "packfile" {
-		return fmt.Errorf("fetch %s: parse response: unknown section %q", r.urlstr, got)
-	}
-	if err := handlePackfileSection(dst, opts.OnProgress, resp); err != nil {
+	if err := handlePackfileSection(dst, opts.OnProgress, respReader); err != nil {
 		return fmt.Errorf("fetch %s: %w", r.urlstr, err)
 	}
 	return nil
 }
 
-func handlePackfileSection(dst io.Writer, onProgress func(string), src io.Reader) error {
-	buf := make([]byte, maxPacketSize)
-	for {
-		ptype, n, err := readPacketLine(src, buf)
-		if ptype == flushPacket || ptype == delimPacket {
-			return nil
+func handlePackfileSection(dst io.Writer, onProgress func(string), src *pktline.Reader) error {
+	for src.Next() && src.Type() == pktline.Data {
+		pkt, err := src.Bytes()
+		if err != nil {
+			return err
 		}
 		if err != nil {
 			return fmt.Errorf("packfile section: %w", err)
 		}
-		if n == 0 {
+		if len(pkt) == 0 {
 			return fmt.Errorf("packfile section: empty packet")
 		}
-		got := buf[1:n]
-		switch buf[0] {
+		pktType, data := pkt[0], pkt[1:]
+		switch pktType {
 		case 1:
 			// Pack data
-			if _, err := dst.Write(got); err != nil {
+			if _, err := dst.Write(data); err != nil {
 				return fmt.Errorf("packfile section: %w", err)
 			}
 		case 2:
 			// Progress message
 			if onProgress != nil {
-				onProgress(string(trimLF(got)))
+				onProgress(string(trimLF(data)))
 			}
 		case 3:
 			// Fatal error message
-			return fmt.Errorf("packfile section: server error: %s", got)
+			return fmt.Errorf("packfile section: server error: %s", trimLF(data))
 		default:
-			return fmt.Errorf("packfile section: encountered bad stream code (%02x)", buf[0])
+			return fmt.Errorf("packfile section: encountered bad stream code (%02x)", pktType)
 		}
 	}
+	if err := src.Err(); err != nil {
+		return fmt.Errorf("packfile section: %w", err)
+	}
+	return nil
+}
+
+func trimLF(line []byte) []byte {
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		return line
+	}
+	return line[:len(line)-1]
 }

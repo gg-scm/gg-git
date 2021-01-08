@@ -20,10 +20,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 
 	"gg-scm.io/pkg/git/githash"
+	"gg-scm.io/pkg/git/internal/pktline"
 	"gg-scm.io/pkg/git/packfile"
 )
 
@@ -49,7 +49,7 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 			conn.Close()
 		}
 	}()
-	refs, err := readRefAdvertisementV1(conn)
+	refs, err := readRefAdvertisementV1(pktline.NewReader(conn))
 	if err != nil {
 		return nil, fmt.Errorf("push %s: %w", r.urlstr, err)
 	}
@@ -60,39 +60,33 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 	}, nil
 }
 
-func readRefAdvertisementV1(r io.Reader) ([]*Ref, error) {
+func readRefAdvertisementV1(r *pktline.Reader) ([]*Ref, error) {
 	// First line is a ref but also includes capabilities.
 	var refs []*Ref
-	buf := make([]byte, maxPacketSize)
-	ptype, n, err := readPacketLine(r, buf)
+	r.Next()
+	line, err := r.Text()
 	if err != nil {
-		return nil, fmt.Errorf("read refs: %w", err)
+		return nil, fmt.Errorf("read refs: first ref: %w", err)
 	}
-	if ptype != dataPacket {
-		return nil, fmt.Errorf("read refs: invalid packet from server")
-	}
-	if bytes.Equal(trimLF(buf[:n]), []byte("version 1")) {
+	if bytes.Equal(line, []byte("version 1")) {
 		// Skip optional initial "version 1" packet.
-		ptype, n, err = readPacketLine(r, buf)
+		r.Next()
+		line, err = r.Text()
 		if err != nil {
-			return nil, fmt.Errorf("read refs: %w", err)
-		}
-		if ptype != dataPacket {
-			return nil, fmt.Errorf("read refs: invalid packet from server")
+			return nil, fmt.Errorf("read refs: first ref: %w", err)
 		}
 	}
-	ref0, _, err := parseFirstRefV1(buf[:n])
+	ref0, _, err := parseFirstRefV1(line)
 	if err != nil {
 		return nil, fmt.Errorf("read refs: %w", err)
 	}
 	if ref0 == nil {
 		// Expect flush next.
 		// TODO(someday): Or shallow?
-		ptype, _, err := readPacketLine(r, buf)
-		if err != nil {
-			return nil, fmt.Errorf("read refs: %w", err)
+		if !r.Next() {
+			return nil, fmt.Errorf("read refs: %w", r.Err())
 		}
-		if ptype != flushPacket {
+		if r.Type() != pktline.Flush {
 			return nil, fmt.Errorf("read refs: expected flush after no-refs")
 		}
 		return nil, nil
@@ -100,28 +94,24 @@ func readRefAdvertisementV1(r io.Reader) ([]*Ref, error) {
 	refs = append(refs, ref0)
 
 	// Subsequent lines are just refs.
-	for {
-		ptype, n, err := readPacketLine(r, buf)
+	for r.Next() && r.Type() != pktline.Flush {
+		line, err := r.Text()
 		if err != nil {
 			return nil, fmt.Errorf("read refs: %w", err)
 		}
-		if ptype == flushPacket {
-			break
-		}
-		if ptype != dataPacket {
-			return nil, fmt.Errorf("read refs: invalid packet from server")
-		}
-		ref, err := parseOtherRefV1(buf[:n])
+		ref, err := parseOtherRefV1(line)
 		if err != nil {
 			return nil, fmt.Errorf("read refs: %w", err)
 		}
 		refs = append(refs, ref)
 	}
+	if err := r.Err(); err != nil {
+		return nil, fmt.Errorf("read refs: %w", err)
+	}
 	return refs, nil
 }
 
 func parseFirstRefV1(line []byte) (*Ref, []string, error) {
-	line = trimLF(line)
 	refEnd := bytes.IndexByte(line, 0)
 	if refEnd == -1 {
 		return nil, nil, fmt.Errorf("first ref: missing nul")
@@ -216,12 +206,12 @@ func (p *PushStream) WriteCommands(objectCount uint32, commands ...*PushCommand)
 	var buf []byte
 	for i, c := range commands {
 		if i == 0 {
-			buf = appendPacketLineString(buf, c.String()+"\x00report-status\n")
+			buf = pktline.AppendString(buf, c.String()+"\x00report-status\n")
 		} else {
-			buf = appendPacketLineString(buf, c.String()+"\n")
+			buf = pktline.AppendString(buf, c.String()+"\n")
 		}
 	}
-	buf = appendFlushPacket(buf)
+	buf = pktline.AppendFlush(buf)
 	if _, err := p.conn.Write(buf); err != nil {
 		return fmt.Errorf("push %s: write commands: %w", p.urlstr, err)
 	}
@@ -280,7 +270,7 @@ func (p *PushStream) readStatus() error {
 		return fmt.Errorf("push %s: %w", p.urlstr, err)
 	}
 	// Read status.
-	report, err := readStatusReport(p.conn)
+	report, err := readStatusReport(pktline.NewReader(p.conn))
 	if err != nil {
 		return fmt.Errorf("push %s: %w", p.urlstr, err)
 	}
@@ -297,23 +287,19 @@ type statusReport struct {
 
 // readStatusReport reads a report-status from the wire.
 // https://git-scm.com/docs/pack-protocol#_report_status
-func readStatusReport(r io.Reader) (*statusReport, error) {
-	buf := make([]byte, maxPacketSize)
-
+func readStatusReport(r *pktline.Reader) (*statusReport, error) {
 	// Read unpack-status
-	ptyp, n, err := readPacketLine(r, buf)
+	r.Next()
+	line, err := r.Text()
 	if err != nil {
 		return nil, fmt.Errorf("read status report: %w", err)
 	}
-	if ptyp != dataPacket {
-		return nil, fmt.Errorf("read status report: invalid packet")
-	}
 	const unpackStatusPrefix = "unpack "
-	if !bytes.HasPrefix(trimLF(buf[:n]), []byte(unpackStatusPrefix)) {
+	if !bytes.HasPrefix(line, []byte(unpackStatusPrefix)) {
 		return nil, fmt.Errorf("read status report: did not start with %q", unpackStatusPrefix)
 	}
 	report := &statusReport{
-		status:   string(trimLF(buf[len(unpackStatusPrefix):n])),
+		status:   string(trimLF(line[len(unpackStatusPrefix):])),
 		commands: make(map[string]string),
 	}
 	if report.status == "" {
@@ -327,18 +313,12 @@ func readStatusReport(r io.Reader) (*statusReport, error) {
 	// Slightly more relaxed than spec.
 	successPrefix := []byte("ok ")
 	errorPrefix := []byte("ng ")
-	for {
-		ptyp, n, err := readPacketLine(r, buf)
+	for r.Next() && r.Type() != pktline.Flush {
+		line, err := r.Text()
 		if err != nil {
 			return nil, fmt.Errorf("read status report: commands: %w", err)
 		}
-		if ptyp == flushPacket {
-			break
-		}
-		if ptyp != dataPacket {
-			return nil, fmt.Errorf("read status report: commands: invalid packet")
-		}
-		switch line := trimLF(buf[:n]); {
+		switch {
 		case bytes.HasPrefix(line, successPrefix):
 			refName := string(line[len(successPrefix):])
 			report.commands[refName] = ""
@@ -355,7 +335,9 @@ func readStatusReport(r io.Reader) (*statusReport, error) {
 			return nil, fmt.Errorf("read status report: commands: unknown command status")
 		}
 	}
-
+	if err := r.Err(); err != nil {
+		return nil, fmt.Errorf("read status report: %w", err)
+	}
 	return report, nil
 }
 

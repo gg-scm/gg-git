@@ -25,6 +25,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+
+	"gg-scm.io/pkg/git/internal/pktline"
 )
 
 const (
@@ -97,23 +99,21 @@ func (r *httpRemote) uploadPackV2Capabilities(ctx context.Context) (v2Capabiliti
 	if contentType := resp.Header.Get("Content-Type"); contentType != "application/x-git-upload-pack-advertisement" {
 		return nil, fmt.Errorf("git protocol v2 http handshake: content-type is %q, not git upload pack", contentType)
 	}
+	respReader := pktline.NewReader(resp.Body)
 	const want = "# service=git-upload-pack"
-	buf := make([]byte, len(want)+1)
-	ptype, n, err := readPacketLine(resp.Body, buf)
-	if err != nil {
+	respReader.Next()
+	if line, err := respReader.Text(); err != nil {
 		return nil, fmt.Errorf("git protocol v2 http handshake: %w", err)
-	}
-	if ptype != dataPacket || !bytes.Equal(trimLF(buf[:n]), []byte(want)) {
+	} else if !bytes.Equal(line, []byte(want)) {
 		return nil, fmt.Errorf("git protocol v2 http handshake: invalid initial packet")
 	}
-	ptype, _, err = readPacketLine(resp.Body, nil)
-	if err != nil {
-		return nil, fmt.Errorf("git protocol v2 http handshake: %w", err)
+	if !respReader.Next() {
+		return nil, fmt.Errorf("git protocol v2 http handshake: %w", respReader.Err())
 	}
-	if ptype != flushPacket {
+	if respReader.Type() != pktline.Flush {
 		return nil, fmt.Errorf("git protocol v2 http handshake: invalid initial packet")
 	}
-	caps, err := parseCapabilityAdvertisement(resp.Body)
+	caps, err := parseCapabilityAdvertisement(respReader)
 	if err != nil {
 		return nil, fmt.Errorf("git protocol v2 http handshake: %w", err)
 	}
@@ -156,20 +156,18 @@ func (r *httpRemote) receivePack(ctx context.Context) (_ receivePackConn, err er
 	if contentType := resp.Header.Get("Content-Type"); contentType != "application/x-git-receive-pack-advertisement" {
 		return nil, fmt.Errorf("receive-pack: refs: content-type is %q, not git receive pack", contentType)
 	}
+	respReader := pktline.NewReader(resp.Body)
 	const want = "# service=git-receive-pack"
-	buf := make([]byte, len(want)+1)
-	ptype, n, err := readPacketLine(resp.Body, buf)
-	if err != nil {
+	respReader.Next()
+	if line, err := respReader.Text(); err != nil {
 		return nil, fmt.Errorf("receive-pack: refs: %w", err)
-	}
-	if ptype != dataPacket || !bytes.Equal(trimLF(buf[:n]), []byte(want)) {
+	} else if !bytes.Equal(line, []byte(want)) {
 		return nil, fmt.Errorf("receive-pack: refs: invalid initial packet")
 	}
-	ptype, _, err = readPacketLine(resp.Body, nil)
-	if err != nil {
-		return nil, fmt.Errorf("receive-pack: refs: %w", err)
+	if !respReader.Next() {
+		return nil, fmt.Errorf("receive-pack: refs: %w", respReader.Err())
 	}
-	if ptype != flushPacket {
+	if respReader.Type() != pktline.Flush {
 		return nil, fmt.Errorf("receive-pack: refs: invalid initial packet")
 	}
 	return &httpReceivePackConn{
