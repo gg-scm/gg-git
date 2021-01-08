@@ -63,7 +63,7 @@ func (r *Remote) Fetch(ctx context.Context, dst io.Writer, want hash.SHA1, opts 
 		commandBuf = appendPacketLineString(commandBuf, "no-progress\n")
 	}
 	commandBuf = appendFlushPacket(commandBuf)
-	resp, err := r.impl.uploadPack(ctx, bytes.NewReader(commandBuf))
+	resp, err := r.impl.uploadPackV2(ctx, bytes.NewReader(commandBuf))
 	if err != nil {
 		return fmt.Errorf("fetch %s: %w", r.urlstr, err)
 	}

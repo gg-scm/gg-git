@@ -82,7 +82,7 @@ func (r *httpRemote) fillHeaders(h http.Header) http.Header {
 	return h
 }
 
-func (r *httpRemote) uploadPackCapabilities(ctx context.Context) (v2Capabilities, error) {
+func (r *httpRemote) uploadPackV2Capabilities(ctx context.Context) (v2Capabilities, error) {
 	resp, err := r.do(ctx, &http.Request{
 		Method: http.MethodGet,
 		URL:    r.url("/info/refs", url.Values{"service": {"git-upload-pack"}}),
@@ -120,7 +120,7 @@ func (r *httpRemote) uploadPackCapabilities(ctx context.Context) (v2Capabilities
 	return caps, nil
 }
 
-func (r *httpRemote) uploadPack(ctx context.Context, cmd io.Reader) (io.ReadCloser, error) {
+func (r *httpRemote) uploadPackV2(ctx context.Context, cmd io.Reader) (io.ReadCloser, error) {
 	resp, err := r.do(ctx, &http.Request{
 		Method: http.MethodPost,
 		URL:    r.url("/git-upload-pack", nil),

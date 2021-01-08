@@ -116,7 +116,7 @@ func (r *Remote) ensureUploadCaps(ctx context.Context) (v2Capabilities, error) {
 		return r.uploadCaps, nil
 	}
 	var err error
-	r.uploadCaps, err = r.impl.uploadPackCapabilities(ctx)
+	r.uploadCaps, err = r.impl.uploadPackV2Capabilities(ctx)
 	return r.uploadCaps, err
 }
 
@@ -152,7 +152,7 @@ func (r *Remote) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, e
 		commandBuf = appendPacketLineString(commandBuf, "ref-prefix "+prefix+"\n")
 	}
 	commandBuf = appendFlushPacket(commandBuf)
-	resp, err := r.impl.uploadPack(ctx, bytes.NewReader(commandBuf))
+	resp, err := r.impl.uploadPackV2(ctx, bytes.NewReader(commandBuf))
 	if err != nil {
 		return nil, fmt.Errorf("list refs for %s: %w", r.urlstr, err)
 	}
@@ -205,8 +205,8 @@ func isRefAttribute(b []byte, name string) (val []byte, ok bool) {
 }
 
 type impl interface {
-	uploadPackCapabilities(ctx context.Context) (v2Capabilities, error)
-	uploadPack(ctx context.Context, cmd io.Reader) (io.ReadCloser, error)
+	uploadPackV2Capabilities(ctx context.Context) (v2Capabilities, error)
+	uploadPackV2(ctx context.Context, cmd io.Reader) (io.ReadCloser, error)
 	receivePack(ctx context.Context) (receivePackConn, error)
 }
 

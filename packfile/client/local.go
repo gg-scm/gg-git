@@ -34,7 +34,7 @@ type fileRemote struct {
 	dir             string
 }
 
-func (r *fileRemote) uploadPackCapabilities(ctx context.Context) (v2Capabilities, error) {
+func (r *fileRemote) uploadPackV2Capabilities(ctx context.Context) (v2Capabilities, error) {
 	c := exec.Command(r.uploadPackPath, "--advertise-refs", "--", r.dir)
 	c.Env = append(os.Environ(), "GIT_PROTOCOL=version=2")
 	out := new(bytes.Buffer)
@@ -65,7 +65,7 @@ func (r *fileRemote) uploadPackCapabilities(ctx context.Context) (v2Capabilities
 	return caps, nil
 }
 
-func (r *fileRemote) uploadPack(ctx context.Context, cmd io.Reader) (io.ReadCloser, error) {
+func (r *fileRemote) uploadPackV2(ctx context.Context, cmd io.Reader) (io.ReadCloser, error) {
 	c := exec.Command(r.uploadPackPath, "--stateless-rpc", "--", r.dir)
 	c.Env = append(os.Environ(), "GIT_PROTOCOL=version=2")
 	c.Stdin = cmd
