@@ -28,8 +28,10 @@ import (
 )
 
 var (
-	_ encoding.TextUnmarshaler = new(Commit)
-	_ encoding.TextMarshaler   = new(Commit)
+	_ encoding.BinaryMarshaler   = new(Commit)
+	_ encoding.BinaryUnmarshaler = new(Commit)
+	_ encoding.TextMarshaler     = new(Commit)
+	_ encoding.TextUnmarshaler   = new(Commit)
 )
 
 var gitCommitTests = []struct {

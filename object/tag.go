@@ -65,8 +65,14 @@ func ParseTag(data []byte) (*Tag, error) {
 	return t, err
 }
 
-// UnmarshalText deserializes a tag from the Git object format.
+// UnmarshalText deserializes a tag from the Git object format. It is the same
+// as calling UnmarshalBinary.
 func (t *Tag) UnmarshalText(data []byte) error {
+	return t.UnmarshalBinary(data)
+}
+
+// UnmarshalBinary deserializes a tag from the Git object format.
+func (t *Tag) UnmarshalBinary(data []byte) error {
 	var ok bool
 	data, ok = consumeString(data, "object ")
 	if !ok {
@@ -130,8 +136,14 @@ func consumeLine(src []byte) (_ string, tail []byte, _ error) {
 	return string(src[:eol]), src[eol+1:], nil
 }
 
-// MarshalText serializes a tag into the Git object format.
+// MarshalText serializes a tag into the Git object format. It is the same as
+// calling MarshalBinary.
 func (t *Tag) MarshalText() ([]byte, error) {
+	return t.MarshalBinary()
+}
+
+// MarshalBinary serializes a tag into the Git object format.
+func (t *Tag) MarshalBinary() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "object %x\n", t.ObjectID)
 	if !t.ObjectType.IsValid() {
