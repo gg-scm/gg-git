@@ -133,8 +133,8 @@ func parseObjectID(src []byte) (githash.SHA1, error) {
 // Ref describes a single reference to a commit.
 type Ref struct {
 	ID           githash.SHA1
-	Name         string
-	SymrefTarget string
+	Name         githash.Ref
+	SymrefTarget githash.Ref
 }
 
 func (r *Remote) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, error) {
@@ -170,14 +170,20 @@ func (r *Remote) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, e
 		if len(words) < 2 {
 			return nil, fmt.Errorf("list refs for %s: parse response: invalid packet from server", r.urlstr)
 		}
-		ref := &Ref{Name: string(words[1])}
+		ref := &Ref{Name: githash.Ref(words[1])}
+		if !ref.Name.IsValid() {
+			return nil, fmt.Errorf("list refs for %s: parse response: ref %q: invalid name", r.urlstr, ref.Name)
+		}
 		ref.ID, err = parseObjectID(words[0])
 		if err != nil {
-			return nil, fmt.Errorf("list refs for %s: parse response: ref %q: %w", r.urlstr, words[1], err)
+			return nil, fmt.Errorf("list refs for %s: parse response: ref %s: %w", r.urlstr, ref.Name, err)
 		}
 		for _, attr := range words[2:] {
 			if val, ok := isRefAttribute(attr, "symref-target"); ok {
-				ref.SymrefTarget = string(val)
+				ref.SymrefTarget = githash.Ref(val)
+				if !ref.SymrefTarget.IsValid() {
+					return nil, fmt.Errorf("list refs for %s: parse response: ref %s: invalid symref target %q", r.urlstr, ref.Name, ref.SymrefTarget)
+				}
 			}
 		}
 		refs = append(refs, ref)

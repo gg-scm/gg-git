@@ -124,13 +124,16 @@ func parseFirstRefV1(line []byte) (*Ref, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("first ref: %w", err)
 	}
-	refName := string(line[idEnd+1 : refEnd])
+	refName := githash.Ref(line[idEnd+1 : refEnd])
 	caps := strings.Fields(string(line[refEnd+1:]))
 	if refName == "capabilities^{}" {
 		if id != (githash.SHA1{}) {
 			return nil, nil, fmt.Errorf("first ref: non-zero ID passed with no-refs response")
 		}
 		return nil, caps, nil
+	}
+	if !refName.IsValid() {
+		return nil, nil, fmt.Errorf("first ref %q: invalid name", refName)
 	}
 	return &Ref{
 		ID:   id,
@@ -144,10 +147,13 @@ func parseOtherRefV1(line []byte) (*Ref, error) {
 	if idEnd == -1 {
 		return nil, fmt.Errorf("ref: missing space")
 	}
-	refName := string(line[idEnd+1:])
+	refName := githash.Ref(line[idEnd+1:])
+	if !refName.IsValid() {
+		return nil, fmt.Errorf("ref %q: invalid name", refName)
+	}
 	id, err := githash.ParseSHA1(string(line[:idEnd]))
 	if err != nil {
-		return nil, fmt.Errorf("ref: %s: %w", refName, err)
+		return nil, fmt.Errorf("ref %s: %w", refName, err)
 	}
 	return &Ref{
 		ID:   id,
