@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package githash provides a type for Git object hashes.
+// Package githash provides types for Git object identifiers.
 package githash
 
 import (
