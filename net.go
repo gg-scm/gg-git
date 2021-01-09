@@ -16,10 +16,11 @@ package git
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+
+	"gg-scm.io/pkg/git/internal/giturl"
 )
 
 // ListRemoteRefs lists all of the refs in a remote repository.
@@ -123,15 +124,5 @@ func (pat RefPattern) Match(ref Ref) (suffix string, ok bool) {
 // ParseURL parses a Git remote URL, including the alternative SCP syntax.
 // See git-fetch(1) for details.
 func ParseURL(urlstr string) (*url.URL, error) {
-	if urlstr == "" {
-		return nil, errors.New("parse git url: empty string")
-	}
-	if i := strings.IndexAny(urlstr, ":/"); i != -1 {
-		if tail := urlstr[i:]; !strings.HasPrefix(tail, "/") &&
-			!strings.HasPrefix(tail, "://") &&
-			!strings.HasPrefix(tail, "::") {
-			urlstr = "ssh://" + urlstr[:i] + "/" + strings.TrimPrefix(tail[1:], "/")
-		}
-	}
-	return url.Parse(urlstr)
+	return giturl.Parse(urlstr)
 }

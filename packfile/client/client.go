@@ -27,6 +27,7 @@ import (
 	"os/exec"
 
 	"gg-scm.io/pkg/git/githash"
+	"gg-scm.io/pkg/git/internal/giturl"
 	"gg-scm.io/pkg/git/internal/pktline"
 )
 
@@ -247,4 +248,10 @@ func parseCapabilityAdvertisement(r *pktline.Reader) (v2Capabilities, error) {
 		return nil, fmt.Errorf("parse capability advertisement: %w", err)
 	}
 	return caps, nil
+}
+
+// ParseURL parses a Git remote URL, including the alternative SCP syntax.
+// See git-fetch(1) for details.
+func ParseURL(urlstr string) (*url.URL, error) {
+	return giturl.Parse(urlstr)
 }
