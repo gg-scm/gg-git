@@ -64,8 +64,14 @@ func ParseCommit(data []byte) (*Commit, error) {
 	return c, err
 }
 
-// UnmarshalText deserializes a commit from the Git object format.
+// UnmarshalText deserializes a commit from the Git object format. It is the
+// same as calling UnmarshalBinary.
 func (c *Commit) UnmarshalText(data []byte) error {
+	return c.UnmarshalBinary(data)
+}
+
+// UnmarshalBinary deserializes a commit from the Git object format.
+func (c *Commit) UnmarshalBinary(data []byte) error {
 	var ok bool
 	data, ok = consumeString(data, "tree ")
 	if !ok {
@@ -128,8 +134,14 @@ func (c *Commit) UnmarshalText(data []byte) error {
 	return nil
 }
 
-// MarshalText serializes a commit into the Git object format.
+// MarshalText serializes a commit into the Git object format. It is the same as
+// calling MarshalBinary.
 func (c *Commit) MarshalText() ([]byte, error) {
+	return c.MarshalBinary()
+}
+
+// MarshalBinary serializes a commit into the Git object format.
+func (c *Commit) MarshalBinary() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "tree %x\n", c.Tree)
 	for _, par := range c.Parents {

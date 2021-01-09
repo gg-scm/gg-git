@@ -28,8 +28,10 @@ import (
 )
 
 var (
-	_ encoding.TextUnmarshaler = new(Tag)
-	_ encoding.TextMarshaler   = new(Tag)
+	_ encoding.BinaryMarshaler   = new(Tag)
+	_ encoding.BinaryUnmarshaler = new(Tag)
+	_ encoding.TextMarshaler     = new(Tag)
+	_ encoding.TextUnmarshaler   = new(Tag)
 )
 
 var gitTagTests = []struct {
