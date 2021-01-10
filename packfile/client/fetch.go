@@ -226,6 +226,7 @@ func (f *packfileReader) Close() error {
 
 // Capability names. See https://git-scm.com/docs/protocol-capabilities
 const (
+	includeTagCap  = "include-tag"
 	multiAckCap    = "multi_ack"
 	noProgressCap  = "no-progress"
 	ofsDeltaCap    = "ofs-delta"

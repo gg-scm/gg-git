@@ -210,8 +210,9 @@ func parseOtherRefV1(line []byte) (*Ref, error) {
 func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error) {
 	// Determine which capabilities we can use.
 	useCaps := capabilityList{
-		multiAckCap: "",
-		ofsDeltaCap: "",
+		includeTagCap: "",
+		multiAckCap:   "",
+		ofsDeltaCap:   "",
 	}
 	if req.Progress == nil {
 		useCaps[noProgressCap] = ""
@@ -227,6 +228,9 @@ func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchReq
 	default:
 		// TODO(someday): Support reading without demuxing.
 		return nil, fmt.Errorf("remote does not support side-band")
+	}
+	if req.IncludeTag && !f.caps.supports(includeTagCap) {
+		return nil, fmt.Errorf("remote does not support include-tag")
 	}
 
 	var commandBuf []byte
