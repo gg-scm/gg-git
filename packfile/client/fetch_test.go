@@ -128,12 +128,12 @@ func TestFetch(t *testing.T) {
 				wantRefs := []*Ref{
 					{
 						Name:         githash.Head,
-						ID:           commitObject.SHA1(),
+						ObjectID:     commitObject.SHA1(),
 						SymrefTarget: wantHeadTarget,
 					},
 					{
-						Name: mainRef,
-						ID:   commitObject.SHA1(),
+						Name:     mainRef,
+						ObjectID: commitObject.SHA1(),
 					},
 				}
 				diff := cmp.Diff(

@@ -84,15 +84,20 @@ func (p *PushStream) Refs() []*Ref {
 	return p.refs
 }
 
-// A PushCommand is an instruction to update a remote ref.
+// A PushCommand is an instruction to update a remote ref. At least one of Old
+// or New must be set.
 type PushCommand struct {
-	Old     githash.SHA1
-	New     githash.SHA1
 	RefName githash.Ref
+	Old     githash.SHA1 // if not set, then create the ref
+	New     githash.SHA1 // if not set, then delete the ref
+}
+
+func (cmd *PushCommand) isZero() bool {
+	return cmd.New == githash.SHA1{} && cmd.Old == githash.SHA1{}
 }
 
 func (cmd *PushCommand) isDelete() bool {
-	return cmd.New == githash.SHA1{}
+	return cmd.New == githash.SHA1{} && cmd.Old != githash.SHA1{}
 }
 
 // String returns the wire representation of the push command.
@@ -121,6 +126,9 @@ func (p *PushStream) WriteCommands(commands ...*PushCommand) error {
 	useCaps.intersect(p.caps)
 	hasNonDelete := false
 	for _, c := range commands {
+		if c.isZero() {
+			return fmt.Errorf("push %s: empty command for %s", p.urlstr, c.RefName)
+		}
 		if c.isDelete() {
 			if !p.caps.supports(deleteRefsCap) {
 				return fmt.Errorf("push %s: remote does not support deleting refs", p.urlstr)

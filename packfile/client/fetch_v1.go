@@ -159,7 +159,7 @@ func parseFirstRefV1(line []byte) (*Ref, capabilityList, error) {
 		return nil, nil, fmt.Errorf("first ref %q: invalid name", refName)
 	}
 	return &Ref{
-		ID:           id,
+		ObjectID:     id,
 		Name:         refName,
 		SymrefTarget: caps.symrefs()[refName],
 	}, caps, nil
@@ -202,8 +202,8 @@ func parseOtherRefV1(line []byte) (*Ref, error) {
 		return nil, fmt.Errorf("ref %s: %w", refName, err)
 	}
 	return &Ref{
-		ID:   id,
-		Name: refName,
+		ObjectID: id,
+		Name:     refName,
 	}, nil
 }
 

@@ -79,7 +79,7 @@ func (r *Remote) StartFetch(ctx context.Context) (_ *FetchStream, err error) {
 
 // Ref describes a single reference to a Git object.
 type Ref struct {
-	ID           githash.SHA1
+	ObjectID     githash.SHA1
 	Name         githash.Ref
 	SymrefTarget githash.Ref
 }

@@ -71,7 +71,7 @@ func (f *fetchV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, e
 		if !ref.Name.IsValid() {
 			return nil, fmt.Errorf("parse response: ref %q: invalid name", ref.Name)
 		}
-		ref.ID, err = parseObjectID(words[0])
+		ref.ObjectID, err = parseObjectID(words[0])
 		if err != nil {
 			return nil, fmt.Errorf("parse response: ref %s: %w", ref.Name, err)
 		}

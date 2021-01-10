@@ -14,6 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+Package client provides a Git packfile protocol client for sending and receiving
+Git objects. The packfile protocol is used in the `git fetch` and `git push`
+commands. See https://git-scm.com/docs/pack-protocol for more detailed information.
+*/
 package client
 
 import (
@@ -29,12 +34,14 @@ import (
 	"gg-scm.io/pkg/git/internal/giturl"
 )
 
+// Remote represents a Git repository that can be pulled from or pushed to.
 type Remote struct {
 	urlstr           string
 	impl             impl
 	fetchExtraParams string
 }
 
+// Options holds optional arguments for creating a Remote.
 type Options struct {
 	HTTPClient        *http.Client // defaults to http.DefaultClient
 	HTTPAuthorization string
@@ -62,6 +69,8 @@ func (opts *Options) httpUserAgent() string {
 	return opts.UserAgent
 }
 
+// NewRemote returns a new Remote or returns an error if the transport specified
+// in the URL scheme is unsupported.
 func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 	urlstr := u.Redacted()
 	remote := &Remote{
