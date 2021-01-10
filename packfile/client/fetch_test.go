@@ -17,6 +17,7 @@
 package client_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -102,12 +103,22 @@ func TestFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal("NewRemote:", err)
 	}
-	buf := new(bytes.Buffer)
-	err = remote.Fetch(ctx, buf, commitObject.SHA1(), nil)
+	stream, err := remote.StartFetch(ctx)
 	if err != nil {
-		t.Error("remote.Fetch:", err)
+		t.Fatal("remote.StartFetch:", err)
 	}
-	got, err := readPackfile(buf)
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error("stream.Close():", err)
+		}
+	}()
+	err = stream.SendRequest(&FetchRequest{
+		Want: []githash.SHA1{commitObject.SHA1()},
+	})
+	if err != nil {
+		t.Error("stream.SendRequest(...):", err)
+	}
+	got, err := readPackfile(bufio.NewReader(stream))
 	if err != nil {
 		t.Error(err)
 	}
