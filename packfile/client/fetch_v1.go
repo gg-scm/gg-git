@@ -216,12 +216,7 @@ func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchReq
 	if req.Progress == nil {
 		useCaps[noProgressCap] = ""
 	}
-	for c := range useCaps {
-		if f.caps.supports(c) {
-			continue
-		}
-		delete(useCaps, sideBandCap)
-	}
+	useCaps.intersect(f.caps)
 	// From https://git-scm.com/docs/protocol-capabilities, "[t]he client MUST
 	// send only maximum [sic] of one of 'side-band' and [sic] 'side-band-64k'."
 	switch {

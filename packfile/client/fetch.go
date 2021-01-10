@@ -275,6 +275,14 @@ func (caps capabilityList) addSymref(elem string) {
 	caps[symrefCap] = v
 }
 
+func (caps capabilityList) intersect(toIntersect capabilityList) {
+	for c := range caps {
+		if !toIntersect.supports(c) {
+			delete(caps, c)
+		}
+	}
+}
+
 func parseCapability(word []byte) (string, string, error) {
 	// TODO(soon): Verify that key and value have permitted characters.
 	k, v := word, []byte(nil)

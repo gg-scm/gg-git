@@ -76,52 +76,56 @@ func TestPush(t *testing.T) {
 	if err != nil {
 		t.Fatal("NewRemote:", err)
 	}
-	sess, err := remote.StartPush(ctx)
+	stream, err := remote.StartPush(ctx)
 	if err != nil {
 		t.Fatal("remote.StartPush:", err)
 	}
 	targetRef := githash.BranchRef("main")
-	err = sess.WriteCommands(3, &PushCommand{
+	err = stream.WriteCommands(&PushCommand{
 		RefName: targetRef,
 		New:     commitObject.SHA1(),
 	})
 	if err != nil {
-		t.Error("PushSession.WriteCommands:", err)
+		t.Error("PushStream.WriteCommands:", err)
 	}
-	_, err = sess.WriteHeader(&packfile.Header{
+	pw := packfile.NewWriter(stream, 3)
+	_, err = pw.WriteHeader(&packfile.Header{
 		Type: packfile.Blob,
 		Size: int64(len(fileContent)),
 	})
 	if err != nil {
-		t.Error("PushSession.WriteHeader:", err)
+		t.Error("WriteHeader:", err)
 	}
-	if _, err := io.WriteString(sess, fileContent); err != nil {
-		t.Error("PushSession.Write:", err)
+	if _, err := io.WriteString(pw, fileContent); err != nil {
+		t.Error("packfile.Writer.Write:", err)
 	}
 	treeObjectData := mustMarshalBinary(t, treeObject)
-	_, err = sess.WriteHeader(&packfile.Header{
+	_, err = pw.WriteHeader(&packfile.Header{
 		Type: packfile.Tree,
 		Size: int64(len(treeObjectData)),
 	})
 	if err != nil {
-		t.Error("PushSession.WriteHeader:", err)
+		t.Error("WriteHeader:", err)
 	}
-	if _, err := sess.Write(treeObjectData); err != nil {
-		t.Error("PushSession.Write:", err)
+	if _, err := pw.Write(treeObjectData); err != nil {
+		t.Error("packfile.Writer.Write:", err)
 	}
 	commitObjectData := mustMarshalBinary(t, commitObject)
-	_, err = sess.WriteHeader(&packfile.Header{
+	_, err = pw.WriteHeader(&packfile.Header{
 		Type: packfile.Commit,
 		Size: int64(len(commitObjectData)),
 	})
 	if err != nil {
-		t.Error("PushSession.WriteHeader:", err)
+		t.Error("WriteHeader:", err)
 	}
-	if _, err := sess.Write(commitObjectData); err != nil {
-		t.Error("PushSession.Write:", err)
+	if _, err := pw.Write(commitObjectData); err != nil {
+		t.Error("packfile.Writer.Write:", err)
 	}
-	if err := sess.Close(); err != nil {
-		t.Error("PushSession.Close:", err)
+	if err := pw.Close(); err != nil {
+		t.Error("packfile.Writer.Close:", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Error("PushStream.Close:", err)
 	}
 
 	rev, err := g.ParseRev(ctx, targetRef.String())

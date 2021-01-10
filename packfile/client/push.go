@@ -24,17 +24,24 @@ import (
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/internal/pktline"
-	"gg-scm.io/pkg/git/packfile"
+)
+
+// receive-pack capability names.
+// See https://git-scm.com/docs/protocol-capabilities
+const (
+	deleteRefsCap   = "delete-refs"
+	reportStatusCap = "report-status"
 )
 
 // PushStream represents a git-receive-pack session.
 type PushStream struct {
 	urlstr string
 	refs   []*Ref
+	caps   capabilityList
 	conn   receivePackConn
 
 	wroteCommands bool
-	pw            *packfile.Writer
+	hasPack       bool
 }
 
 // StartPush starts a git-receive-pack session, reading the ref advertisements.
@@ -66,6 +73,7 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 	return &PushStream{
 		urlstr: r.urlstr,
 		refs:   refs,
+		caps:   caps,
 		conn:   conn,
 	}, nil
 }
@@ -94,26 +102,32 @@ func (cmd *PushCommand) String() string {
 
 // WriteCommands informs the remote what ref changes to make once the stream is
 // complete. This must be called at most once, and must be called before any
-// calls to WriteHeader or Write.
-func (p *PushStream) WriteCommands(objectCount uint32, commands ...*PushCommand) error {
+// calls to Write.
+func (p *PushStream) WriteCommands(commands ...*PushCommand) error {
 	// Verify preconditions.
 	if p.wroteCommands {
 		return fmt.Errorf("push %s: WriteCommands called multiple times", p.urlstr)
 	}
 	if len(commands) == 0 {
-		if objectCount > 0 {
-			return fmt.Errorf("push %s: cannot write objects with no commands", p.urlstr)
-		}
 		return nil
 	}
+
+	// Determine which capabilities we can use.
+	useCaps := capabilityList{
+		reportStatusCap: "",
+		ofsDeltaCap:     "",
+		deleteRefsCap:   "",
+	}
+	useCaps.intersect(p.caps)
 	hasNonDelete := false
 	for _, c := range commands {
-		if !c.isDelete() {
+		if c.isDelete() {
+			if !p.caps.supports(deleteRefsCap) {
+				return fmt.Errorf("push %s: remote does not support deleting refs", p.urlstr)
+			}
+		} else {
 			hasNonDelete = true
 		}
-	}
-	if objectCount > 0 && !hasNonDelete {
-		return fmt.Errorf("push %s: cannot write objects without non-delete commands", p.urlstr)
 	}
 
 	// Write commands.
@@ -121,7 +135,7 @@ func (p *PushStream) WriteCommands(objectCount uint32, commands ...*PushCommand)
 	var buf []byte
 	for i, c := range commands {
 		if i == 0 {
-			buf = pktline.AppendString(buf, c.String()+"\x00report-status\n")
+			buf = pktline.AppendString(buf, c.String()+"\x00"+useCaps.String()+"\n")
 		} else {
 			buf = pktline.AppendString(buf, c.String()+"\n")
 		}
@@ -130,39 +144,24 @@ func (p *PushStream) WriteCommands(objectCount uint32, commands ...*PushCommand)
 	if _, err := p.conn.Write(buf); err != nil {
 		return fmt.Errorf("push %s: write commands: %w", p.urlstr, err)
 	}
-	if hasNonDelete {
-		p.pw = packfile.NewWriter(p.conn, objectCount)
-	}
+	p.hasPack = hasNonDelete
 	return nil
 }
 
-// WriteHeader writes hdr and prepares to accept the object's contents.
-// WriteHeader returns an error if it is called before WriteCommands.
-//
-// See *packfile.Writer.WriteHeader for more details.
-func (p *PushStream) WriteHeader(hdr *packfile.Header) (int64, error) {
-	if p.pw == nil {
-		return 0, fmt.Errorf("push %s: write header without relevant command", p.urlstr)
-	}
-	return p.pw.WriteHeader(hdr)
-}
-
-// Write writes to the current object in the packfile.
-// Write returns an error if it is called before WriteCommands.
-//
-// See *packfile.Writer.Write for more details.
+// Write writes packfile data. It returns an error if it is called before
+// WriteCommands.
 func (p *PushStream) Write(data []byte) (int, error) {
-	if p.pw == nil {
+	if !p.hasPack {
 		return 0, fmt.Errorf("push %s: write without relevant command", p.urlstr)
 	}
-	return p.pw.Write(data)
+	return p.conn.Write(data)
 }
 
 // Close completes the stream and releases any resources associated with the
 // stream.
 func (p *PushStream) Close() error {
 	var err1 error
-	if p.wroteCommands {
+	if p.wroteCommands && p.caps.supports(reportStatusCap) {
 		err1 = p.readStatus()
 	}
 	err2 := p.conn.Close()
@@ -173,12 +172,6 @@ func (p *PushStream) Close() error {
 }
 
 func (p *PushStream) readStatus() error {
-	// Finish packfile, if one is being written.
-	if p.pw != nil {
-		if err := p.pw.Close(); err != nil {
-			return fmt.Errorf("push %s: %w", p.urlstr, err)
-		}
-	}
 	// Indicate that we're done writing. This is required for the HTTP protocol
 	// to finish the request body.
 	if err := p.conn.CloseWrite(); err != nil {
