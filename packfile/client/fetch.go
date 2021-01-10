@@ -56,6 +56,83 @@ func (r *Remote) StartFetch(ctx context.Context) (*FetchStream, error) {
 	}, nil
 }
 
+// Ref describes a single reference to a Git object.
+type Ref struct {
+	ID           githash.SHA1
+	Name         githash.Ref
+	SymrefTarget githash.Ref
+}
+
+// ListRefs lists the remote's references. If refPrefixes is given, then only
+// refs that start with one of the given strings are returned.
+func (f *FetchStream) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, error) {
+	if !f.caps.supports("ls-refs") {
+		return nil, fmt.Errorf("list refs for %s: unsupported by server", f.urlstr)
+	}
+
+	var commandBuf []byte
+	commandBuf = pktline.AppendString(commandBuf, "command=ls-refs\n")
+	commandBuf = pktline.AppendDelim(commandBuf)
+	commandBuf = pktline.AppendString(commandBuf, "symrefs\n")
+	for _, prefix := range refPrefixes {
+		commandBuf = pktline.AppendString(commandBuf, "ref-prefix "+prefix+"\n")
+	}
+	commandBuf = pktline.AppendFlush(commandBuf)
+	resp, err := f.impl.uploadPackV2(ctx, bytes.NewReader(commandBuf))
+	if err != nil {
+		return nil, fmt.Errorf("list refs for %s: %w", f.urlstr, err)
+	}
+	defer resp.Close()
+	var refs []*Ref
+	respReader := pktline.NewReader(resp)
+	for respReader.Next() && respReader.Type() != pktline.Flush {
+		line, err := respReader.Text()
+		if err != nil {
+			return nil, fmt.Errorf("list refs for %s: parse response: %w", f.urlstr, err)
+		}
+		words := bytes.Fields(line)
+		if len(words) < 2 {
+			return nil, fmt.Errorf("list refs for %s: parse response: invalid packet from server", f.urlstr)
+		}
+		ref := &Ref{Name: githash.Ref(words[1])}
+		if !ref.Name.IsValid() {
+			return nil, fmt.Errorf("list refs for %s: parse response: ref %q: invalid name", f.urlstr, ref.Name)
+		}
+		ref.ID, err = parseObjectID(words[0])
+		if err != nil {
+			return nil, fmt.Errorf("list refs for %s: parse response: ref %s: %w", f.urlstr, ref.Name, err)
+		}
+		for _, attr := range words[2:] {
+			if val, ok := isRefAttribute(attr, "symref-target"); ok {
+				ref.SymrefTarget = githash.Ref(val)
+				if !ref.SymrefTarget.IsValid() {
+					return nil, fmt.Errorf("list refs for %s: parse response: ref %s: invalid symref target %q", f.urlstr, ref.Name, ref.SymrefTarget)
+				}
+			}
+		}
+		refs = append(refs, ref)
+	}
+	if err := respReader.Err(); err != nil {
+		return nil, fmt.Errorf("list refs for %s: parse response: %w", f.urlstr, err)
+	}
+	return refs, nil
+}
+
+func isRefAttribute(b []byte, name string) (val []byte, ok bool) {
+	if len(b) < len(name)+1 {
+		return nil, false
+	}
+	for i := 0; i < len(name); i++ {
+		if b[i] != name[i] {
+			return nil, false
+		}
+	}
+	if b[len(name)] != ':' {
+		return nil, false
+	}
+	return b[len(name)+1:], true
+}
+
 // A FetchRequest informs the remote which objects to include in the packfile.
 type FetchRequest struct {
 	// Want is the set of object IDs to send. At least one must be specified,
