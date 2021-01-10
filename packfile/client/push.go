@@ -171,7 +171,7 @@ func (p *PushStream) Refs() []*Ref {
 type PushCommand struct {
 	Old     githash.SHA1
 	New     githash.SHA1
-	RefName string
+	RefName githash.Ref
 }
 
 func (cmd *PushCommand) isDelete() bool {
@@ -180,7 +180,7 @@ func (cmd *PushCommand) isDelete() bool {
 
 // String returns the wire representation of the push command.
 func (cmd *PushCommand) String() string {
-	return cmd.Old.String() + " " + cmd.New.String() + " " + cmd.RefName
+	return cmd.Old.String() + " " + cmd.New.String() + " " + cmd.RefName.String()
 }
 
 // WriteCommands informs the remote what ref changes to make once the stream is
