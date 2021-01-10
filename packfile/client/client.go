@@ -17,7 +17,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -28,15 +27,11 @@ import (
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/internal/giturl"
-	"gg-scm.io/pkg/git/internal/pktline"
 )
 
 type Remote struct {
 	urlstr string
 	impl   impl
-
-	uploadCapsMu chan struct{}
-	uploadCaps   v2Capabilities
 }
 
 type Options struct {
@@ -69,8 +64,7 @@ func (opts *Options) httpUserAgent() string {
 func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 	urlstr := u.Redacted()
 	remote := &Remote{
-		urlstr:       urlstr,
-		uploadCapsMu: make(chan struct{}, 1),
+		urlstr: urlstr,
 	}
 	switch u.Scheme {
 	case "", "file":
@@ -107,21 +101,6 @@ func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 	return remote, nil
 }
 
-func (r *Remote) ensureUploadCaps(ctx context.Context) (v2Capabilities, error) {
-	select {
-	case r.uploadCapsMu <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	defer func() { <-r.uploadCapsMu }()
-	if r.uploadCaps != nil {
-		return r.uploadCaps, nil
-	}
-	var err error
-	r.uploadCaps, err = r.impl.uploadPackV2Capabilities(ctx)
-	return r.uploadCaps, err
-}
-
 func parseObjectID(src []byte) (githash.SHA1, error) {
 	var id githash.SHA1
 	if err := id.UnmarshalText(src); err != nil {
@@ -131,8 +110,8 @@ func parseObjectID(src []byte) (githash.SHA1, error) {
 }
 
 type impl interface {
-	uploadPackV2Capabilities(ctx context.Context) (v2Capabilities, error)
-	uploadPackV2(ctx context.Context, cmd io.Reader) (io.ReadCloser, error)
+	advertiseRefs(ctx context.Context, extraParams string) (io.ReadCloser, error)
+	uploadPack(ctx context.Context, extraParams string, request io.Reader) (io.ReadCloser, error)
 	receivePack(ctx context.Context) (receivePackConn, error)
 }
 
@@ -141,40 +120,6 @@ type receivePackConn interface {
 	io.Writer
 	CloseWrite() error
 	io.Closer
-}
-
-// v2Capabilities is the parsed result of an initial server query.
-type v2Capabilities map[string]string
-
-func (caps v2Capabilities) supports(key string) bool {
-	_, ok := caps[key]
-	return ok
-}
-
-func parseCapabilityAdvertisement(r *pktline.Reader) (v2Capabilities, error) {
-	r.Next()
-	if line, err := r.Text(); err != nil {
-		return nil, fmt.Errorf("parse capability advertisement: %w", err)
-	} else if !bytes.Equal(line, []byte("version 2")) {
-		return nil, fmt.Errorf("parse capability advertisement: not Git protocol version 2 (%q)", line)
-	}
-	caps := make(v2Capabilities)
-	for r.Next() && r.Type() != pktline.Flush {
-		line, err := r.Text()
-		if err != nil {
-			return nil, fmt.Errorf("parse capability advertisement: %w", err)
-		}
-		// TODO(soon): Verify that key and value have permitted characters.
-		k, v := line, []byte(nil)
-		if i := bytes.IndexByte(line, '='); i != -1 {
-			k, v = line[:i], line[i+1:]
-		}
-		caps[string(k)] = string(v)
-	}
-	if err := r.Err(); err != nil {
-		return nil, fmt.Errorf("parse capability advertisement: %w", err)
-	}
-	return caps, nil
 }
 
 // ParseURL parses a Git remote URL, including the alternative SCP syntax.

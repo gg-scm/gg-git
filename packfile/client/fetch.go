@@ -17,7 +17,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -28,31 +27,37 @@ import (
 
 // FetchStream represents a git-upload-pack session.
 type FetchStream struct {
-	ctx    context.Context
-	urlstr string
-	impl   impl
-	caps   v2Capabilities
+	ctx      context.Context
+	urlstr   string
+	impl     fetcher
+	packfile io.ReadCloser
+}
 
-	packReader *pktline.Reader
-	packCloser io.Closer
-	packError  error
-	curr       []byte // current packfile packet
-	progress   io.Writer
+type fetcher interface {
+	fetch(ctx context.Context, req *FetchRequest) (io.ReadCloser, error)
+	listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error)
 }
 
 // StartFetch starts a git-upload-pack session on the remote.
 // The Context is used for the entire fetch stream. The caller is responsible
 // for calling Close on the returned FetchStream.
 func (r *Remote) StartFetch(ctx context.Context) (*FetchStream, error) {
-	caps, err := r.ensureUploadCaps(ctx)
+	resp, err := r.impl.advertiseRefs(ctx, v2ExtraParams)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
+	}
+	defer resp.Close()
+	caps, err := parseCapabilityAdvertisement(pktline.NewReader(resp))
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
 	}
 	return &FetchStream{
 		ctx:    ctx,
 		urlstr: r.urlstr,
-		impl:   r.impl,
-		caps:   caps,
+		impl: &fetchV2{
+			caps: caps,
+			impl: r.impl,
+		},
 	}, nil
 }
 
@@ -65,72 +70,12 @@ type Ref struct {
 
 // ListRefs lists the remote's references. If refPrefixes is given, then only
 // refs that start with one of the given strings are returned.
-func (f *FetchStream) ListRefs(ctx context.Context, refPrefixes ...string) ([]*Ref, error) {
-	if !f.caps.supports("ls-refs") {
-		return nil, fmt.Errorf("list refs for %s: unsupported by server", f.urlstr)
-	}
-
-	var commandBuf []byte
-	commandBuf = pktline.AppendString(commandBuf, "command=ls-refs\n")
-	commandBuf = pktline.AppendDelim(commandBuf)
-	commandBuf = pktline.AppendString(commandBuf, "symrefs\n")
-	for _, prefix := range refPrefixes {
-		commandBuf = pktline.AppendString(commandBuf, "ref-prefix "+prefix+"\n")
-	}
-	commandBuf = pktline.AppendFlush(commandBuf)
-	resp, err := f.impl.uploadPackV2(ctx, bytes.NewReader(commandBuf))
+func (f *FetchStream) ListRefs(refPrefixes ...string) ([]*Ref, error) {
+	refs, err := f.impl.listRefs(f.ctx, refPrefixes)
 	if err != nil {
 		return nil, fmt.Errorf("list refs for %s: %w", f.urlstr, err)
 	}
-	defer resp.Close()
-	var refs []*Ref
-	respReader := pktline.NewReader(resp)
-	for respReader.Next() && respReader.Type() != pktline.Flush {
-		line, err := respReader.Text()
-		if err != nil {
-			return nil, fmt.Errorf("list refs for %s: parse response: %w", f.urlstr, err)
-		}
-		words := bytes.Fields(line)
-		if len(words) < 2 {
-			return nil, fmt.Errorf("list refs for %s: parse response: invalid packet from server", f.urlstr)
-		}
-		ref := &Ref{Name: githash.Ref(words[1])}
-		if !ref.Name.IsValid() {
-			return nil, fmt.Errorf("list refs for %s: parse response: ref %q: invalid name", f.urlstr, ref.Name)
-		}
-		ref.ID, err = parseObjectID(words[0])
-		if err != nil {
-			return nil, fmt.Errorf("list refs for %s: parse response: ref %s: %w", f.urlstr, ref.Name, err)
-		}
-		for _, attr := range words[2:] {
-			if val, ok := isRefAttribute(attr, "symref-target"); ok {
-				ref.SymrefTarget = githash.Ref(val)
-				if !ref.SymrefTarget.IsValid() {
-					return nil, fmt.Errorf("list refs for %s: parse response: ref %s: invalid symref target %q", f.urlstr, ref.Name, ref.SymrefTarget)
-				}
-			}
-		}
-		refs = append(refs, ref)
-	}
-	if err := respReader.Err(); err != nil {
-		return nil, fmt.Errorf("list refs for %s: parse response: %w", f.urlstr, err)
-	}
 	return refs, nil
-}
-
-func isRefAttribute(b []byte, name string) (val []byte, ok bool) {
-	if len(b) < len(name)+1 {
-		return nil, false
-	}
-	for i := 0; i < len(name); i++ {
-		if b[i] != name[i] {
-			return nil, false
-		}
-	}
-	if b[len(name)] != ':' {
-		return nil, false
-	}
-	return b[len(name)+1:], true
 }
 
 // A FetchRequest informs the remote which objects to include in the packfile.
@@ -155,53 +100,14 @@ func (f *FetchStream) SendRequest(req *FetchRequest) (err error) {
 	if len(req.Want) == 0 {
 		return fmt.Errorf("fetch %s: no objects requested", f.urlstr)
 	}
-	if !f.caps.supports("fetch") {
-		return fmt.Errorf("fetch %s: unsupported by server", f.urlstr)
+	if f.packfile != nil {
+		return fmt.Errorf("fetch %s: send request: request already sent", f.urlstr)
 	}
-
-	var commandBuf []byte
-	commandBuf = pktline.AppendString(commandBuf, "command=fetch\n")
-	commandBuf = pktline.AppendDelim(commandBuf)
-	for _, want := range req.Want {
-		commandBuf = pktline.AppendString(commandBuf, "want "+want.String()+"\n")
-	}
-	for _, have := range req.Have {
-		commandBuf = pktline.AppendString(commandBuf, "have "+have.String()+"\n")
-	}
-	// TODO(soon): Add commit negotiation option.
-	commandBuf = pktline.AppendString(commandBuf, "done\n")
-	if req.IncludeTag {
-		commandBuf = pktline.AppendString(commandBuf, "include-tag\n")
-	}
-	if req.Progress == nil {
-		commandBuf = pktline.AppendString(commandBuf, "no-progress\n")
-	}
-	commandBuf = pktline.AppendFlush(commandBuf)
-	resp, err := f.impl.uploadPackV2(f.ctx, bytes.NewReader(commandBuf))
+	resp, err := f.impl.fetch(f.ctx, req)
 	if err != nil {
-		return fmt.Errorf("fetch %s: %w", f.urlstr, err)
+		return fmt.Errorf("fetch %s: send request: %w", f.urlstr, err)
 	}
-	f.packReader = pktline.NewReader(resp)
-	f.packCloser = resp
-	f.packError = nil
-	f.curr = nil
-	f.progress = nil
-	defer func() {
-		if err != nil {
-			f.packReader = nil
-			f.packCloser = nil
-			resp.Close()
-		}
-	}()
-
-	f.packReader.Next()
-	line, err := f.packReader.Text()
-	if err != nil {
-		return fmt.Errorf("fetch %s: parse response: %w", f.urlstr, err)
-	}
-	if !bytes.Equal(line, []byte("packfile")) {
-		return fmt.Errorf("fetch %s: parse response: unknown section %q", f.urlstr, line)
-	}
+	f.packfile = resp
 	return nil
 }
 
@@ -211,70 +117,23 @@ func (f *FetchStream) SendRequest(req *FetchRequest) (err error) {
 // Read will write any progress messages sent by the remote to the Progress
 // writer specified in SendRequest.
 func (f *FetchStream) Read(p []byte) (int, error) {
-	if f.packError != nil {
-		return 0, f.packError
-	}
-	if f.packReader == nil {
+	if f.packfile == nil {
 		return 0, fmt.Errorf("fetch %s: read packfile: read attempted before request", f.urlstr)
 	}
-	if len(f.curr) > 0 {
-		n := copy(p, f.curr)
-		f.curr = f.curr[n:]
-		return n, nil
+	n, err := f.packfile.Read(p)
+	if err == io.EOF {
+		return n, io.EOF
 	}
-	n, err := f.read(p)
 	if err != nil {
-		f.packError = err
+		return n, fmt.Errorf("fetch %s: read packfile: %w", f.urlstr, err)
 	}
-	return n, err
-}
-
-func (f *FetchStream) read(p []byte) (int, error) {
-	for f.packReader.Next() && f.packReader.Type() == pktline.Data {
-		pkt, err := f.packReader.Bytes()
-		if err != nil {
-			return 0, fmt.Errorf("fetch %s: read packfile: %w", f.urlstr, err)
-		}
-		if len(pkt) == 0 {
-			return 0, fmt.Errorf("fetch %s: read packfile: empty packet", f.urlstr)
-		}
-		pktType, data := pkt[0], pkt[1:]
-		switch pktType {
-		case 1:
-			// Pack data
-			n := copy(p, data)
-			f.curr = data[n:]
-			return n, nil
-		case 2:
-			// Progress message
-			if f.progress != nil {
-				f.progress.Write(data)
-			}
-		case 3:
-			// Fatal error message
-			return 0, fmt.Errorf("fetch %s: read packfile: server error: %s", f.urlstr, trimLF(data))
-		default:
-			return 0, fmt.Errorf("fetch %s: read packfile: encountered bad stream code (%02x)", f.urlstr, pktType)
-		}
-	}
-	if err := f.packReader.Err(); err != nil {
-		return 0, fmt.Errorf("fetch %s: read packfile: %w", f.urlstr, err)
-	}
-	return 0, io.EOF
-}
-
-func trimLF(line []byte) []byte {
-	if len(line) == 0 || line[len(line)-1] != '\n' {
-		return line
-	}
-	return line[:len(line)-1]
+	return n, nil
 }
 
 // Close releases any resources used by the stream.
 func (f *FetchStream) Close() error {
-	if f.packCloser != nil {
-		// TODO(someday): Close error is usually signaled.
-		f.packCloser.Close()
+	if f.packfile != nil {
+		return f.packfile.Close()
 	}
 	return nil
 }

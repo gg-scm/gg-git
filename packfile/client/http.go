@@ -36,8 +36,6 @@ const (
 	userAgentHeader     = "User-Agent"
 )
 
-const gitProtocolV2HeaderValue = "version=2"
-
 type httpRemote struct {
 	client        *http.Client
 	base          *url.URL
@@ -84,58 +82,62 @@ func (r *httpRemote) fillHeaders(h http.Header) http.Header {
 	return h
 }
 
-func (r *httpRemote) uploadPackV2Capabilities(ctx context.Context) (v2Capabilities, error) {
+func (r *httpRemote) advertiseRefs(ctx context.Context, extraParams string) (_ io.ReadCloser, err error) {
 	resp, err := r.do(ctx, &http.Request{
 		Method: http.MethodGet,
 		URL:    r.url("/info/refs", url.Values{"service": {"git-upload-pack"}}),
 		Header: http.Header{
-			gitProtocolHeader: {gitProtocolV2HeaderValue},
+			gitProtocolHeader: {extraParams},
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("git protocol v2 http handshake: %w", err)
+		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err != nil {
+			resp.Body.Close()
+		}
+	}()
 	if contentType := resp.Header.Get("Content-Type"); contentType != "application/x-git-upload-pack-advertisement" {
-		return nil, fmt.Errorf("git protocol v2 http handshake: content-type is %q, not git upload pack", contentType)
+		return nil, fmt.Errorf("content-type is %q, not git upload pack", contentType)
 	}
 	respReader := pktline.NewReader(resp.Body)
 	const want = "# service=git-upload-pack"
 	respReader.Next()
 	if line, err := respReader.Text(); err != nil {
-		return nil, fmt.Errorf("git protocol v2 http handshake: %w", err)
+		return nil, err
 	} else if !bytes.Equal(line, []byte(want)) {
-		return nil, fmt.Errorf("git protocol v2 http handshake: invalid initial packet")
+		return nil, fmt.Errorf("invalid initial packet")
 	}
 	if !respReader.Next() {
-		return nil, fmt.Errorf("git protocol v2 http handshake: %w", respReader.Err())
+		return nil, respReader.Err()
 	}
 	if respReader.Type() != pktline.Flush {
-		return nil, fmt.Errorf("git protocol v2 http handshake: invalid initial packet")
+		return nil, fmt.Errorf("invalid initial packet")
 	}
-	caps, err := parseCapabilityAdvertisement(respReader)
-	if err != nil {
-		return nil, fmt.Errorf("git protocol v2 http handshake: %w", err)
-	}
-	return caps, nil
+	return resp.Body, nil
 }
 
-func (r *httpRemote) uploadPackV2(ctx context.Context, cmd io.Reader) (io.ReadCloser, error) {
+func (r *httpRemote) uploadPack(ctx context.Context, extraParams string, request io.Reader) (_ io.ReadCloser, err error) {
 	resp, err := r.do(ctx, &http.Request{
 		Method: http.MethodPost,
 		URL:    r.url("/git-upload-pack", nil),
 		Header: http.Header{
 			contentTypeHeader: {"application/x-git-upload-pack-request"},
-			gitProtocolHeader: {gitProtocolV2HeaderValue},
+			gitProtocolHeader: {extraParams},
 		},
-		Body: ioutil.NopCloser(cmd),
+		Body: ioutil.NopCloser(request),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("upload-pack: %w", err)
+		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			resp.Body.Close()
+		}
+	}()
 	if contentType := resp.Header.Get("Content-Type"); contentType != "application/x-git-upload-pack-result" {
-		resp.Body.Close()
-		return nil, fmt.Errorf("upload-pack: content-type is %q, not git upload pack", contentType)
+		return nil, fmt.Errorf("content-type is %q, not git upload pack", contentType)
 	}
 	return resp.Body, nil
 }

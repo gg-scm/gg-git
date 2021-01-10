@@ -17,7 +17,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +25,7 @@ import (
 	"os/exec"
 
 	"gg-scm.io/pkg/git/internal/pktline"
-	"golang.org/x/sys/unix"
+	"gg-scm.io/pkg/git/internal/sigterm"
 )
 
 type fileRemote struct {
@@ -35,108 +34,92 @@ type fileRemote struct {
 	dir             string
 }
 
-func (r *fileRemote) uploadPackV2Capabilities(ctx context.Context) (v2Capabilities, error) {
-	c := exec.Command(r.uploadPackPath, "--advertise-refs", "--", r.dir)
-	c.Env = append(os.Environ(), "GIT_PROTOCOL=version=2")
-	out := new(bytes.Buffer)
-	c.Stdout = out
-	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("git-upload-pack --advertise-refs %s: %w", r.dir, err)
-	}
-	waited := make(chan struct{})
-	killGoroutineDone := make(chan struct{})
-	go func() {
-		defer close(killGoroutineDone)
-		select {
-		case <-ctx.Done():
-			c.Process.Signal(unix.SIGTERM)
-		case <-waited:
-		}
-	}()
-	err := c.Wait()
-	close(waited)
-	<-killGoroutineDone
-	if err != nil {
-		return nil, fmt.Errorf("git-upload-pack --advertise-refs %s: %w", r.dir, err)
-	}
-	caps, err := parseCapabilityAdvertisement(pktline.NewReader(out))
-	if err != nil {
-		return nil, fmt.Errorf("git-upload-pack --advertise-refs %s: %w", r.dir, err)
-	}
-	return caps, nil
+func (r *fileRemote) advertiseRefs(ctx context.Context, extraParams string) (io.ReadCloser, error) {
+	return r.startUploadPack(ctx, "--advertise-refs", extraParams, nil)
 }
 
-func (r *fileRemote) uploadPackV2(ctx context.Context, cmd io.Reader) (io.ReadCloser, error) {
-	c := exec.Command(r.uploadPackPath, "--stateless-rpc", "--", r.dir)
-	c.Env = append(os.Environ(), "GIT_PROTOCOL=version=2")
-	c.Stdin = cmd
+func (r *fileRemote) uploadPack(ctx context.Context, extraParams string, request io.Reader) (io.ReadCloser, error) {
+	return r.startUploadPack(ctx, "--stateless-rpc", extraParams, request)
+}
+
+func (r *fileRemote) startUploadPack(ctx context.Context, mode string, extraParams string, request io.Reader) (*uploadPackReader, error) {
+	errPrefix := "git-upload-pack " + mode + " " + r.dir
+	c := exec.Command(r.uploadPackPath, mode, "--", r.dir)
+	c.Env = append(os.Environ(), "GIT_PROTOCOL="+extraParams)
+	c.Stdin = request
 	stdout, err := c.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("git-upload-pack --stateless-rpc %s: %w", r.dir, err)
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("git-upload-pack --stateless-rpc %s: %w", r.dir, err)
+	wait, err := sigterm.Start(ctx, c)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	return &uploadPackReader{
-		dir:  r.dir,
-		c:    c,
-		pipe: stdout,
+		errPrefix: errPrefix,
+		pipe:      stdout,
+		wait:      wait,
 	}, nil
 }
 
 type uploadPackReader struct {
-	dir  string
-	c    *exec.Cmd
-	pipe io.ReadCloser
+	errPrefix string
+	pipe      io.ReadCloser
+	wait      func() error
 }
 
 func (r *uploadPackReader) Read(p []byte) (int, error) {
 	return r.pipe.Read(p)
 }
 
+func (r *uploadPackReader) WriteTo(w io.Writer) (int64, error) {
+	return io.Copy(w, r.pipe)
+}
+
 func (r *uploadPackReader) Close() error {
-	r.c.Process.Signal(unix.SIGTERM)
 	r.pipe.Close()
-	if err := r.c.Wait(); err != nil {
-		return fmt.Errorf("git-upload-pack --stateless-rpc %s: %w", r.dir, err)
+	if err := r.wait(); err != nil {
+		return fmt.Errorf("%s: %w", r.errPrefix, err)
 	}
 	return nil
 }
 
 func (r *fileRemote) receivePack(ctx context.Context) (receivePackConn, error) {
+	errPrefix := "git-receive-pack " + r.dir
 	c := exec.Command(r.receivePackPath, "--", r.dir)
 	stdin, err := c.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("git-receive-pack %s: %w", r.dir, err)
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		stdin.Close()
-		return nil, fmt.Errorf("git-receive-pack %s: %w", r.dir, err)
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("git-receive-pack %s: %w", r.dir, err)
+	wait, err := sigterm.Start(ctx, c)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	return &localReceivePackConn{
-		dir:    r.dir,
-		c:      c,
-		stdin:  stdin,
-		stdout: stdout,
+		errPrefix: errPrefix,
+		stdin:     stdin,
+		stdout:    stdout,
+		wait:      wait,
 	}, nil
 }
 
 type localReceivePackConn struct {
-	dir    string
-	c      *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.Reader
-	wrote  bool
+	errPrefix string
+	stdin     io.WriteCloser
+	stdout    io.Reader
+	wait      func() error
+	wrote     bool
 }
 
 func (conn *localReceivePackConn) Read(p []byte) (int, error) {
 	n, err := conn.stdout.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
-		err = fmt.Errorf("git-receive-pack %s: %w", conn.dir, err)
+		err = fmt.Errorf("%s: %w", conn.errPrefix, err)
 	}
 	return n, err
 }
@@ -144,7 +127,7 @@ func (conn *localReceivePackConn) Read(p []byte) (int, error) {
 func (conn *localReceivePackConn) Write(p []byte) (int, error) {
 	n, err := conn.stdin.Write(p)
 	if err != nil {
-		err = fmt.Errorf("git-receive-pack %s: %w", conn.dir, err)
+		err = fmt.Errorf("%s: %w", conn.errPrefix, err)
 	}
 	if n > 0 {
 		conn.wrote = true
@@ -161,8 +144,8 @@ func (conn *localReceivePackConn) Close() error {
 		conn.stdin.Write(pktline.AppendFlush(nil))
 	}
 	conn.stdin.Close()
-	if err := conn.c.Wait(); err != nil {
-		return fmt.Errorf("git-receive-pack %s: %w", conn.dir, err)
+	if err := conn.wait(); err != nil {
+		return fmt.Errorf("%s: %w", conn.errPrefix, err)
 	}
 	return nil
 }
