@@ -20,17 +20,22 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/internal/pktline"
 )
 
+// Reference: https://git-scm.com/docs/protocol-v2
+
 const v2ExtraParams = "version=2"
 
 type fetchV2 struct {
-	caps v2Capabilities
+	caps capabilityList
 	impl impl
+}
+
+func (f *fetchV2) Close() error {
+	return nil
 }
 
 func (f *fetchV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
@@ -101,7 +106,12 @@ func isRefAttribute(b []byte, name string) (val []byte, ok bool) {
 	return b[len(name)+1:], true
 }
 
-func (f *fetchV2) fetch(ctx context.Context, req *FetchRequest) (_ io.ReadCloser, err error) {
+const (
+	ackPrefix = "ACK "
+	nak       = "NAK"
+)
+
+func (f *fetchV2) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (_ *FetchResponse, err error) {
 	if !f.caps.supports("fetch") {
 		return nil, fmt.Errorf("unsupported by server")
 	}
@@ -115,8 +125,9 @@ func (f *fetchV2) fetch(ctx context.Context, req *FetchRequest) (_ io.ReadCloser
 	for _, have := range req.Have {
 		commandBuf = pktline.AppendString(commandBuf, "have "+have.String()+"\n")
 	}
-	// TODO(soon): Add commit negotiation option.
-	commandBuf = pktline.AppendString(commandBuf, "done\n")
+	if !req.HaveMore {
+		commandBuf = pktline.AppendString(commandBuf, "done\n")
+	}
 	if req.IncludeTag {
 		commandBuf = pktline.AppendString(commandBuf, "include-tag\n")
 	}
@@ -140,102 +151,78 @@ func (f *fetchV2) fetch(ctx context.Context, req *FetchRequest) (_ io.ReadCloser
 	if err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
-	if !bytes.Equal(line, []byte("packfile")) {
+	result := &FetchResponse{
+		Packfile: &packfileReader{
+			errPrefix:  errPrefix,
+			packReader: respReader,
+			packCloser: resp,
+			progress:   req.Progress,
+		},
+	}
+	const packfileSection = "packfile"
+	switch string(line) {
+	case packfileSection:
+		return result, nil
+	case "acknowledgements":
+		result.Acks = make(map[githash.SHA1]bool)
+		ready := false
+		for respReader.Next() && respReader.Type() == pktline.Data {
+			line, err := respReader.Text()
+			if err != nil {
+				return nil, fmt.Errorf("parse response: acknowledgements: %w", err)
+			}
+			switch {
+			case bytes.HasPrefix(line, []byte(ackPrefix)):
+				var id githash.SHA1
+				if err := id.UnmarshalText(line[len(ackPrefix):]); err != nil {
+					return nil, fmt.Errorf("parse response: acknowledgements: %w", err)
+				}
+				result.Acks[id] = true
+			case bytes.Equal(line, []byte(nak)):
+			case bytes.Equal(line, []byte("ready")):
+				ready = true
+			default:
+				return nil, fmt.Errorf("parse response: acknowledgements: unrecognized directive %q", line)
+			}
+		}
+		if err := respReader.Err(); err != nil {
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
+		if !ready {
+			result.Packfile = nil
+			resp.Close()
+			return result, nil
+		}
+		if respReader.Type() != pktline.Delim {
+			return nil, fmt.Errorf("parse response: acknowledgements: expected delim or data (got %v)", respReader.Type())
+		}
+
+		respReader.Next()
+		line, err = respReader.Text()
+		if err != nil {
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
+		if !bytes.Equal(line, []byte(packfileSection)) {
+			return nil, fmt.Errorf("parse response: unexpected section %q", line)
+		}
+		return result, nil
+	default:
 		return nil, fmt.Errorf("parse response: unknown section %q", line)
 	}
-	return &v2Reader{
-		packReader: respReader,
-		packCloser: resp,
-		progress:   req.Progress,
-	}, nil
 }
 
-type v2Reader struct {
-	packReader *pktline.Reader
-	packCloser io.Closer
+const version2Line = "version 2"
 
-	curr      []byte // current packfile packet
-	packError error
-	progress  io.Writer
-}
-
-func (f *v2Reader) Read(p []byte) (int, error) {
-	if len(f.curr) > 0 {
-		n := copy(p, f.curr)
-		f.curr = f.curr[n:]
-		return n, nil
-	}
-	if f.packError != nil {
-		return 0, f.packError
-	}
-	n, err := f.read(p)
-	if err != nil {
-		f.packError = err
-	}
-	return n, err
-}
-
-func (f *v2Reader) read(p []byte) (int, error) {
-	for f.packReader.Next() && f.packReader.Type() == pktline.Data {
-		pkt, err := f.packReader.Bytes()
-		if err != nil {
-			return 0, err
-		}
-		if len(pkt) == 0 {
-			return 0, fmt.Errorf("empty packet")
-		}
-		pktType, data := pkt[0], pkt[1:]
-		switch pktType {
-		case 1:
-			// Pack data
-			n := copy(p, data)
-			f.curr = data[n:]
-			return n, nil
-		case 2:
-			// Progress message
-			if f.progress != nil {
-				f.progress.Write(data)
-			}
-		case 3:
-			// Fatal error message
-			return 0, fmt.Errorf("server error: %s", trimLF(data))
-		default:
-			return 0, fmt.Errorf("encountered bad stream code (%02x)", pktType)
-		}
-	}
-	if err := f.packReader.Err(); err != nil {
-		return 0, err
-	}
-	return 0, io.EOF
-}
-
-func trimLF(line []byte) []byte {
-	if len(line) == 0 || line[len(line)-1] != '\n' {
-		return line
-	}
-	return line[:len(line)-1]
-}
-
-func (f *v2Reader) Close() error {
-	return f.packCloser.Close()
-}
-
-// v2Capabilities is the parsed result of an initial server query.
-type v2Capabilities map[string]string
-
-func (caps v2Capabilities) supports(key string) bool {
-	_, ok := caps[key]
-	return ok
-}
-
-func parseCapabilityAdvertisement(r *pktline.Reader) (v2Capabilities, error) {
-	r.Next()
+// parseCapabilityAdvertisementV2 parses the version 2 "refs" advertisement
+// response. The caller is expected to have advanced r to the "version 2" line
+// before calling parseCapabilityAdvertisementV2.
+func parseCapabilityAdvertisementV2(r *pktline.Reader) (capabilityList, error) {
 	if line, err := r.Text(); err != nil {
 		return nil, fmt.Errorf("parse capability advertisement: %w", err)
-	} else if !bytes.Equal(line, []byte("version 2")) {
+	} else if !bytes.Equal(line, []byte(version2Line)) {
 		return nil, fmt.Errorf("parse capability advertisement: not Git protocol version 2 (%q)", line)
 	}
-	caps := make(v2Capabilities)
+	caps := make(capabilityList)
 	for r.Next() && r.Type() != pktline.Flush {
 		line, err := r.Text()
 		if err != nil {

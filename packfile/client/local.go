@@ -51,6 +51,8 @@ func (r *fileRemote) startUploadPack(ctx context.Context, mode string, extraPara
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
+	// TODO(now): remove (debugging)
+	c.Stderr = os.Stderr
 	wait, err := sigterm.Start(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)

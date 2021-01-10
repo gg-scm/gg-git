@@ -17,9 +17,12 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/internal/pktline"
@@ -27,38 +30,51 @@ import (
 
 // FetchStream represents a git-upload-pack session.
 type FetchStream struct {
-	ctx      context.Context
-	urlstr   string
-	impl     fetcher
-	packfile io.ReadCloser
+	ctx    context.Context
+	urlstr string
+	impl   fetcher
 }
 
 type fetcher interface {
-	fetch(ctx context.Context, req *FetchRequest) (io.ReadCloser, error)
+	negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error)
 	listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error)
+	Close() error
 }
 
 // StartFetch starts a git-upload-pack session on the remote.
 // The Context is used for the entire fetch stream. The caller is responsible
 // for calling Close on the returned FetchStream.
-func (r *Remote) StartFetch(ctx context.Context) (*FetchStream, error) {
-	resp, err := r.impl.advertiseRefs(ctx, v2ExtraParams)
+func (r *Remote) StartFetch(ctx context.Context) (_ *FetchStream, err error) {
+	resp, err := r.impl.advertiseRefs(ctx, r.fetchExtraParams)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
 	}
-	defer resp.Close()
-	caps, err := parseCapabilityAdvertisement(pktline.NewReader(resp))
+	// Not deferring resp.Close because V1 needs to retain resp.
+	respReader := pktline.NewReader(resp)
+	respReader.Next()
+	line, err := respReader.Text()
 	if err != nil {
+		resp.Close()
 		return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
 	}
-	return &FetchStream{
+	f := &FetchStream{
 		ctx:    ctx,
 		urlstr: r.urlstr,
-		impl: &fetchV2{
+	}
+	if bytes.Equal(line, []byte(version2Line)) {
+		caps, err := parseCapabilityAdvertisementV2(respReader)
+		resp.Close()
+		if err != nil {
+			return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
+		}
+		f.impl = &fetchV2{
 			caps: caps,
 			impl: r.impl,
-		},
-	}, nil
+		}
+	} else {
+		f.impl = newFetchV1(r.impl, respReader, resp)
+	}
+	return f, nil
 }
 
 // Ref describes a single reference to a Git object.
@@ -70,6 +86,9 @@ type Ref struct {
 
 // ListRefs lists the remote's references. If refPrefixes is given, then only
 // refs that start with one of the given strings are returned.
+//
+// If you need to call both ListRefs and Negotiate on a stream, you should call
+// ListRefs first. Older Git servers send their refs upfront
 func (f *FetchStream) ListRefs(refPrefixes ...string) ([]*Ref, error) {
 	refs, err := f.impl.listRefs(f.ctx, refPrefixes)
 	if err != nil {
@@ -86,6 +105,10 @@ type FetchRequest struct {
 	// Have is the set of object IDs that the server can exclude from the
 	// packfile. It may be empty.
 	Have []githash.SHA1
+	// If HaveMore is true, then the response will not return a Packfile if the
+	// remote hasn't found a suitable base.
+	HaveMore bool
+
 	// IncludeTag indicates whether annotated tags should be sent if the objects
 	// they point to are being sent.
 	IncludeTag bool
@@ -94,46 +117,141 @@ type FetchRequest struct {
 	Progress io.Writer
 }
 
-// SendRequest requests a packfile from the remote. It must be called before
-// calling the Read method.
-func (f *FetchStream) SendRequest(req *FetchRequest) (err error) {
-	if len(req.Want) == 0 {
-		return fmt.Errorf("fetch %s: no objects requested", f.urlstr)
-	}
-	if f.packfile != nil {
-		return fmt.Errorf("fetch %s: send request: request already sent", f.urlstr)
-	}
-	resp, err := f.impl.fetch(f.ctx, req)
-	if err != nil {
-		return fmt.Errorf("fetch %s: send request: %w", f.urlstr, err)
-	}
-	f.packfile = resp
-	return nil
+// A FetchResponse holds the remote response to a round of negotiation.
+type FetchResponse struct {
+	// Packfile is a packfile stream. It may be nil if the request set HaveMore
+	// and the remote didn't find a suitable base.
+	//
+	// Any progress messages sent by the remote will be written to the Progress
+	// writer specified in the request while reading from Packfile.
+	Packfile io.ReadCloser
+	// Acks indicates which of the Have objects from the request that the remote
+	// shares. It may not be populated if Packfile is not nil.
+	Acks map[githash.SHA1]bool
 }
 
-// Read reads the packfile stream, returning the number of bytes read into p and
-// any error that occurred. It is an error to call Read before calling SendRequest.
-//
-// Read will write any progress messages sent by the remote to the Progress
-// writer specified in SendRequest.
-func (f *FetchStream) Read(p []byte) (int, error) {
-	if f.packfile == nil {
-		return 0, fmt.Errorf("fetch %s: read packfile: read attempted before request", f.urlstr)
+// Negotiate requests a packfile from the remote. It must be called before
+// calling the Read method.
+func (f *FetchStream) Negotiate(req *FetchRequest) (*FetchResponse, error) {
+	errPrefix := "fetch " + f.urlstr
+	if len(req.Want) == 0 {
+		return nil, fmt.Errorf("%s: no objects requested", errPrefix)
 	}
-	n, err := f.packfile.Read(p)
-	if err == io.EOF {
-		return n, io.EOF
-	}
+	resp, err := f.impl.negotiate(f.ctx, errPrefix, req)
 	if err != nil {
-		return n, fmt.Errorf("fetch %s: read packfile: %w", f.urlstr, err)
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	return n, nil
+	if resp.Packfile == nil && !req.HaveMore {
+		return nil, fmt.Errorf("%s: remote did not send a packfile", errPrefix)
+	}
+	return resp, nil
 }
 
 // Close releases any resources used by the stream.
 func (f *FetchStream) Close() error {
-	if f.packfile != nil {
-		return f.packfile.Close()
+	return f.impl.Close()
+}
+
+// packfileReader reads multiplexed packfile data.
+type packfileReader struct {
+	errPrefix  string
+	packReader *pktline.Reader
+	packCloser io.Closer
+
+	curr      []byte // current packfile packet
+	packError error
+	progress  io.Writer
+}
+
+func (f *packfileReader) Read(p []byte) (int, error) {
+	if len(f.curr) > 0 {
+		n := copy(p, f.curr)
+		f.curr = f.curr[n:]
+		return n, nil
 	}
-	return nil
+	if f.packError != nil {
+		return 0, f.packError
+	}
+	n, err := f.read(p)
+	if err != nil {
+		f.packError = err
+	}
+	return n, err
+}
+
+func (f *packfileReader) read(p []byte) (int, error) {
+	for f.packReader.Next() && f.packReader.Type() == pktline.Data {
+		pkt, err := f.packReader.Bytes()
+		if err != nil {
+			return 0, err
+		}
+		if len(pkt) == 0 {
+			return 0, fmt.Errorf("%s: empty packet", f.errPrefix)
+		}
+		pktType, data := pkt[0], pkt[1:]
+		switch pktType {
+		case 1:
+			// Pack data
+			n := copy(p, data)
+			f.curr = data[n:]
+			return n, nil
+		case 2:
+			// Progress message
+			if f.progress != nil {
+				f.progress.Write(data)
+			}
+		case 3:
+			// Fatal error message
+			return 0, fmt.Errorf("%s: server error: %s", f.errPrefix, trimLF(data))
+		default:
+			return 0, fmt.Errorf("%s: encountered bad stream code (%02x)", f.errPrefix, pktType)
+		}
+	}
+	if err := f.packReader.Err(); err != nil {
+		return 0, fmt.Errorf("%s: %w", f.errPrefix, err)
+	}
+	return 0, io.EOF
+}
+
+func trimLF(line []byte) []byte {
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		return line
+	}
+	return line[:len(line)-1]
+}
+
+func (f *packfileReader) Close() error {
+	return f.packCloser.Close()
+}
+
+// capabilityList is a set of capability tokens. Version 2 capabilities may
+// have values.
+type capabilityList map[string]string
+
+func (caps capabilityList) supports(key string) bool {
+	_, ok := caps[key]
+	return ok
+}
+
+func (caps capabilityList) String() string {
+	if len(caps) == 0 {
+		return ""
+	}
+	keys := make([]string, len(caps))
+	for k := range caps {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	sb := new(strings.Builder)
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(k)
+		if v := caps[k]; v != "" {
+			sb.WriteString("=")
+			sb.WriteString(v)
+		}
+	}
+	return sb.String()
 }

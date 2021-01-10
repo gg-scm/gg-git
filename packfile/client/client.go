@@ -30,8 +30,9 @@ import (
 )
 
 type Remote struct {
-	urlstr string
-	impl   impl
+	urlstr           string
+	impl             impl
+	fetchExtraParams string
 }
 
 type Options struct {
@@ -64,7 +65,8 @@ func (opts *Options) httpUserAgent() string {
 func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 	urlstr := u.Redacted()
 	remote := &Remote{
-		urlstr: urlstr,
+		urlstr:           urlstr,
+		fetchExtraParams: v2ExtraParams,
 	}
 	switch u.Scheme {
 	case "", "file":

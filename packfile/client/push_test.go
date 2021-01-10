@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package client_test
+package client
 
 import (
 	"context"
@@ -29,7 +29,6 @@ import (
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/object"
 	"gg-scm.io/pkg/git/packfile"
-	. "gg-scm.io/pkg/git/packfile/client"
 )
 
 func TestPush(t *testing.T) {

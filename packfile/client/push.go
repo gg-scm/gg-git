@@ -49,9 +49,19 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 			conn.Close()
 		}
 	}()
-	refs, err := readRefAdvertisementV1(pktline.NewReader(conn))
+	connReader := pktline.NewReader(conn)
+	connReader.Next()
+	ref0, _, err := readFirstRefV1(connReader)
 	if err != nil {
 		return nil, fmt.Errorf("push %s: %w", r.urlstr, err)
+	}
+	var refs []*Ref
+	if ref0 != nil {
+		refs = append(refs, ref0)
+		refs, err = readOtherRefsV1(refs, connReader)
+		if err != nil {
+			return nil, fmt.Errorf("push %s: %w", r.urlstr, err)
+		}
 	}
 	return &PushStream{
 		urlstr: r.urlstr,

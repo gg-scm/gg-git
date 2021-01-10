@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package client_test
+package client
 
 import (
 	"bufio"
@@ -36,8 +36,8 @@ import (
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/object"
 	"gg-scm.io/pkg/git/packfile"
-	. "gg-scm.io/pkg/git/packfile/client"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestFetch(t *testing.T) {
@@ -50,6 +50,10 @@ func TestFetch(t *testing.T) {
 		t.Skip("Can't find Git, skipping:", err)
 	}
 	if err := g.Init(ctx, "."); err != nil {
+		t.Fatal(err)
+	}
+	mainRef, err := g.HeadRef(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 	const fname = "foo.txt"
@@ -94,41 +98,83 @@ func TestFetch(t *testing.T) {
 		CommitTime: commitTime,
 		Message:    commitMessage,
 	}
-
 	remoteURL := &url.URL{
 		Scheme: "file",
 		Path:   filepath.FromSlash(dir),
 	}
-	remote, err := NewRemote(remoteURL, nil)
-	if err != nil {
-		t.Fatal("NewRemote:", err)
-	}
-	stream, err := remote.StartFetch(ctx)
-	if err != nil {
-		t.Fatal("remote.StartFetch:", err)
-	}
-	defer func() {
-		if err := stream.Close(); err != nil {
-			t.Error("stream.Close():", err)
-		}
-	}()
-	err = stream.SendRequest(&FetchRequest{
-		Want: []githash.SHA1{commitObject.SHA1()},
-	})
-	if err != nil {
-		t.Error("stream.SendRequest(...):", err)
-	}
-	got, err := readPackfile(bufio.NewReader(stream))
-	if err != nil {
-		t.Error(err)
-	}
-	want := map[githash.SHA1][]byte{
-		blobObjectID:        []byte(fileContent),
-		treeObject.SHA1():   mustMarshalBinary(t, treeObject),
-		commitObject.SHA1(): mustMarshalBinary(t, commitObject),
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("objects (-want +got):\n%s", diff)
+
+	for version := 1; version <= 2; version++ {
+		t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
+			remote, err := NewRemote(remoteURL, nil)
+			if err != nil {
+				t.Fatal("NewRemote:", err)
+			}
+			if version == 1 {
+				remote.fetchExtraParams = v1ExtraParams
+			}
+			stream, err := remote.StartFetch(ctx)
+			if err != nil {
+				t.Fatal("remote.StartFetch:", err)
+			}
+			defer func() {
+				if err := stream.Close(); err != nil {
+					t.Error("stream.Close():", err)
+				}
+			}()
+			if gotRefs, err := stream.ListRefs(); err != nil {
+				t.Error("ListRefs:", err)
+			} else {
+				wantHeadTarget := mainRef
+				if version == 1 {
+					// TODO(maybe): Is this a limitation of V1 or is there a way to deduce?
+					wantHeadTarget = ""
+				}
+				wantRefs := []*Ref{
+					{
+						Name:         githash.Head,
+						ID:           commitObject.SHA1(),
+						SymrefTarget: wantHeadTarget,
+					},
+					{
+						Name: mainRef,
+						ID:   commitObject.SHA1(),
+					},
+				}
+				diff := cmp.Diff(
+					wantRefs, gotRefs,
+					cmpopts.SortSlices(func(r1, r2 *Ref) bool { return r1.Name < r2.Name }),
+				)
+				if diff != "" {
+					t.Errorf("ListRefs() (-want +got):\n%s", diff)
+				}
+			}
+			resp, err := stream.Negotiate(&FetchRequest{
+				Want: []githash.SHA1{commitObject.SHA1()},
+			})
+			if err != nil {
+				t.Fatal("stream.Negotiate:", err)
+			}
+			if resp.Packfile == nil {
+				t.Fatal("stream.Negotiate returned nil Packfile")
+			}
+			defer func() {
+				if err := resp.Packfile.Close(); err != nil {
+					t.Error("stream.Close():", err)
+				}
+			}()
+			got, err := readPackfile(bufio.NewReader(resp.Packfile))
+			if err != nil {
+				t.Error(err)
+			}
+			want := map[githash.SHA1][]byte{
+				blobObjectID:        []byte(fileContent),
+				treeObject.SHA1():   mustMarshalBinary(t, treeObject),
+				commitObject.SHA1(): mustMarshalBinary(t, commitObject),
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("objects (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
