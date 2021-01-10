@@ -228,12 +228,11 @@ func parseCapabilityAdvertisementV2(r *pktline.Reader) (capabilityList, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse capability advertisement: %w", err)
 		}
-		// TODO(soon): Verify that key and value have permitted characters.
-		k, v := line, []byte(nil)
-		if i := bytes.IndexByte(line, '='); i != -1 {
-			k, v = line[:i], line[i+1:]
+		k, v, err := parseCapability(line)
+		if err != nil {
+			return nil, fmt.Errorf("parse capability advertisement: %w", err)
 		}
-		caps[string(k)] = string(v)
+		caps[k] = v
 	}
 	if err := r.Err(); err != nil {
 		return nil, fmt.Errorf("parse capability advertisement: %w", err)

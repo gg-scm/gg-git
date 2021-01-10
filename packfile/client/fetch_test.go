@@ -125,10 +125,6 @@ func TestFetch(t *testing.T) {
 				t.Error("ListRefs:", err)
 			} else {
 				wantHeadTarget := mainRef
-				if version == 1 {
-					// TODO(maybe): Is this a limitation of V1 or is there a way to deduce?
-					wantHeadTarget = ""
-				}
 				wantRefs := []*Ref{
 					{
 						Name:         githash.Head,

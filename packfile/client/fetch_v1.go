@@ -69,7 +69,7 @@ func (f *fetchV1) Close() error {
 
 func (f *fetchV1) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
 	if f.refsReader != nil {
-		f.refs, f.refsError = readOtherRefsV1(f.refs, f.refsReader)
+		f.refs, f.refsError = readOtherRefsV1(f.refs, f.caps.symrefs(), f.refsReader)
 		f.refsCloser.Close()
 		f.refsReader = nil
 		f.refsCloser = nil
@@ -138,8 +138,16 @@ func parseFirstRefV1(line []byte) (*Ref, capabilityList, error) {
 	}
 	refName := githash.Ref(line[idEnd+1 : refEnd])
 	caps := make(capabilityList)
-	for _, c := range strings.Fields(string(line[refEnd+1:])) {
-		caps[c] = ""
+	for _, c := range bytes.Fields(line[refEnd+1:]) {
+		k, v, err := parseCapability(c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("first ref: %w", err)
+		}
+		if k == symrefCap {
+			caps.addSymref(v)
+		} else {
+			caps[k] = v
+		}
 	}
 	if refName == "capabilities^{}" {
 		if id != (githash.SHA1{}) {
@@ -151,15 +159,16 @@ func parseFirstRefV1(line []byte) (*Ref, capabilityList, error) {
 		return nil, nil, fmt.Errorf("first ref %q: invalid name", refName)
 	}
 	return &Ref{
-		ID:   id,
-		Name: refName,
+		ID:           id,
+		Name:         refName,
+		SymrefTarget: caps.symrefs()[refName],
 	}, caps, nil
 }
 
 // readOtherRefsV1 parses the second and subsequent refs in the version 1 refs
 // advertisement response. The caller is expected to have advanced r past the
 // first ref before calling readOtherRefsV1.
-func readOtherRefsV1(refs []*Ref, r *pktline.Reader) ([]*Ref, error) {
+func readOtherRefsV1(refs []*Ref, symrefs map[githash.Ref]githash.Ref, r *pktline.Reader) ([]*Ref, error) {
 	for r.Next() && r.Type() != pktline.Flush {
 		line, err := r.Text()
 		if err != nil {
@@ -169,6 +178,7 @@ func readOtherRefsV1(refs []*Ref, r *pktline.Reader) ([]*Ref, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read refs: %w", err)
 		}
+		ref.SymrefTarget = symrefs[ref.Name]
 		refs = append(refs, ref)
 	}
 	if err := r.Err(); err != nil {
@@ -198,22 +208,30 @@ func parseOtherRefV1(line []byte) (*Ref, error) {
 }
 
 func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error) {
-	// Find which capabilities we can use.
-	const sideBandCap = "side-band"
+	// Determine which capabilities we can use.
 	useCaps := capabilityList{
-		sideBandCap:     "",
-		"side-band-64k": "",
-		"multi_ack":     "",
+		multiAckCap: "",
+		ofsDeltaCap: "",
+	}
+	if req.Progress == nil {
+		useCaps[noProgressCap] = ""
 	}
 	for c := range useCaps {
 		if f.caps.supports(c) {
 			continue
 		}
-		if c == sideBandCap {
-			// TODO(someday): Support reading without demuxing.
-			return nil, fmt.Errorf("remote does not support side-band")
-		}
 		delete(useCaps, sideBandCap)
+	}
+	// From https://git-scm.com/docs/protocol-capabilities, "[t]he client MUST
+	// send only maximum [sic] of one of 'side-band' and [sic] 'side-band-64k'."
+	switch {
+	case f.caps.supports(sideBand64KCap):
+		useCaps[sideBand64KCap] = ""
+	case f.caps.supports(sideBandCap):
+		useCaps[sideBandCap] = ""
+	default:
+		// TODO(someday): Support reading without demuxing.
+		return nil, fmt.Errorf("remote does not support side-band")
 	}
 
 	var commandBuf []byte

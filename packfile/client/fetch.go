@@ -224,8 +224,18 @@ func (f *packfileReader) Close() error {
 	return f.packCloser.Close()
 }
 
-// capabilityList is a set of capability tokens. Version 2 capabilities may
-// have values.
+// Capability names. See https://git-scm.com/docs/protocol-capabilities
+const (
+	multiAckCap    = "multi_ack"
+	noProgressCap  = "no-progress"
+	ofsDeltaCap    = "ofs-delta"
+	sideBand64KCap = "side-band-64k"
+	sideBandCap    = "side-band"
+	symrefCap      = "symref"
+)
+
+// capabilityList is a set of capability tokens.
+// See https://git-scm.com/docs/protocol-capabilities
 type capabilityList map[string]string
 
 func (caps capabilityList) supports(key string) bool {
@@ -233,25 +243,84 @@ func (caps capabilityList) supports(key string) bool {
 	return ok
 }
 
-func (caps capabilityList) String() string {
-	if len(caps) == 0 {
-		return ""
+// symrefs parses the symrefCap value. It's the only repeated capability
+// permitted, so it's stored as a space-separated string.
+func (caps capabilityList) symrefs() map[githash.Ref]githash.Ref {
+	words := strings.Fields(caps[symrefCap])
+	if len(words) == 0 {
+		return nil
 	}
+	m := make(map[githash.Ref]githash.Ref, len(words))
+	for _, w := range words {
+		i := strings.IndexByte(w, ':')
+		if i == -1 {
+			continue
+		}
+		sym := githash.Ref(w[:i])
+		target := githash.Ref(w[i+1:])
+		if !sym.IsValid() || !target.IsValid() {
+			continue
+		}
+		m[sym] = target
+	}
+	return m
+}
+
+func (caps capabilityList) addSymref(elem string) {
+	v := caps[symrefCap]
+	if v != "" {
+		v += " "
+	}
+	v += elem
+	caps[symrefCap] = v
+}
+
+func parseCapability(word []byte) (string, string, error) {
+	// TODO(soon): Verify that key and value have permitted characters.
+	k, v := word, []byte(nil)
+	if i := bytes.IndexByte(word, '='); i != -1 {
+		k, v = word[:i], word[i+1:]
+	}
+	return string(k), string(v), nil
+}
+
+func (caps capabilityList) MarshalText() ([]byte, error) {
+	if len(caps) == 0 {
+		return nil, nil
+	}
+	// TODO(someday): Ensure keys and values use valid characters.
 	keys := make([]string, len(caps))
 	for k := range caps {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	sb := new(strings.Builder)
-	for i, k := range keys {
-		if i > 0 {
-			sb.WriteString(" ")
+	var buf []byte
+	for _, k := range keys {
+		if k == symrefCap {
+			// symrefCap is stored as space-separated values, but should be repeated.
+			for _, v := range strings.Fields(caps[k]) {
+				if len(buf) > 0 {
+					buf = append(buf, ' ')
+				}
+				buf = append(buf, k...)
+				buf = append(buf, '=')
+				buf = append(buf, v...)
+			}
+			continue
 		}
-		sb.WriteString(k)
+		if len(buf) > 0 {
+			buf = append(buf, ' ')
+		}
+		buf = append(buf, k...)
 		if v := caps[k]; v != "" {
-			sb.WriteString("=")
-			sb.WriteString(v)
+			buf = append(buf, '=')
+			buf = append(buf, v...)
 		}
 	}
-	return sb.String()
+	return buf, nil
+}
+
+func (caps capabilityList) String() string {
+	text, _ := caps.MarshalText()
+	return string(text)
 }
