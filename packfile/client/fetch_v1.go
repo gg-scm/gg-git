@@ -19,7 +19,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"strings"
@@ -271,16 +270,18 @@ ackLoop:
 		switch {
 		case bytes.HasPrefix(line, []byte(ackPrefix)):
 			line = line[len(ackPrefix):]
-			var id githash.SHA1
-			idEnd := hex.EncodedLen(len(id))
-			if idEnd > len(line) {
-				return nil, fmt.Errorf("parse response: acknowledgements: ack too short")
+			idEnd := bytes.IndexByte(line, ' ')
+			statusStart := idEnd + 1
+			if idEnd == -1 {
+				idEnd = len(line)
+				statusStart = idEnd
 			}
+			var id githash.SHA1
 			if err := id.UnmarshalText(line[:idEnd]); err != nil {
 				return nil, fmt.Errorf("parse response: acknowledgements: %w", err)
 			}
 			result.Acks[id] = true
-			switch status := line[idEnd:]; {
+			switch status := line[statusStart:]; {
 			case len(status) == 0:
 				foundCommonBase = true
 				break ackLoop

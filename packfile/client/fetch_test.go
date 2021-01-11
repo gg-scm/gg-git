@@ -33,7 +33,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -55,129 +54,288 @@ func TestFetch(t *testing.T) {
 		t.Skip("Can't find Git, skipping:", err)
 	}
 	g := git.Custom(dir, localGit, localGit)
-	if err := g.Init(ctx, "."); err != nil {
-		t.Fatal(err)
-	}
-	mainRef, err := g.HeadRef(ctx)
+	objects, err := initFetchTestRepository(ctx, g, dir)
 	if err != nil {
 		t.Fatal(err)
-	}
-	const fname = "foo.txt"
-	const fileContent = "Hello, World!\n"
-	err = ioutil.WriteFile(filepath.Join(dir, fname), []byte(fileContent), 0o666)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = g.Add(ctx, []git.Pathspec{git.LiteralPath(fname)}, git.AddOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const commitMessage = "Initial import"
-	const author object.User = "Octocat <octocat@example.com>"
-	commitTime := time.Date(2020, time.January, 9, 14, 50, 0, 0, time.FixedZone("-0800", -8*60*60))
-	err = g.Commit(ctx, commitMessage, git.CommitOptions{
-		Author:     author,
-		AuthorTime: commitTime,
-		Committer:  author,
-		CommitTime: commitTime,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	blobObjectID, err := object.BlobSum(strings.NewReader(fileContent), int64(len(fileContent)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	treeObject := object.Tree{
-		{
-			Name:     fname,
-			Mode:     object.ModePlain,
-			ObjectID: blobObjectID,
-		},
-	}
-	commitObject := &object.Commit{
-		Tree:       treeObject.SHA1(),
-		Author:     author,
-		AuthorTime: commitTime,
-		Committer:  author,
-		CommitTime: commitTime,
-		Message:    commitMessage,
 	}
 
 	for _, transport := range allTransportVariants(localGit.Exe()) {
 		t.Run(transport.name, func(t *testing.T) {
 			for version := 1; version <= 2; version++ {
 				t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
-					remote, err := NewRemote(transport.getURL(t, dir), nil)
-					if err != nil {
-						t.Fatal("NewRemote:", err)
-					}
-					if version == 1 {
-						remote.fetchExtraParams = v1ExtraParams
-					}
-					stream, err := remote.StartFetch(ctx)
-					if err != nil {
-						t.Fatal("remote.StartFetch:", err)
-					}
-					defer func() {
-						if err := stream.Close(); err != nil {
-							t.Error("stream.Close():", err)
-						}
-					}()
-					if gotRefs, err := stream.ListRefs(); err != nil {
-						t.Error("ListRefs:", err)
-					} else {
-						wantHeadTarget := mainRef
-						wantRefs := []*Ref{
-							{
-								Name:         githash.Head,
-								ObjectID:     commitObject.SHA1(),
-								SymrefTarget: wantHeadTarget,
-							},
-							{
-								Name:     mainRef,
-								ObjectID: commitObject.SHA1(),
-							},
-						}
-						diff := cmp.Diff(
-							wantRefs, gotRefs,
-							cmpopts.SortSlices(func(r1, r2 *Ref) bool { return r1.Name < r2.Name }),
-						)
-						if diff != "" {
-							t.Errorf("ListRefs() (-want +got):\n%s", diff)
-						}
-					}
-					resp, err := stream.Negotiate(&FetchRequest{
-						Want: []githash.SHA1{commitObject.SHA1()},
-					})
-					if err != nil {
-						t.Fatal("stream.Negotiate:", err)
-					}
-					if resp.Packfile == nil {
-						t.Fatal("stream.Negotiate returned nil Packfile")
-					}
-					defer func() {
-						if err := resp.Packfile.Close(); err != nil {
-							t.Error("stream.Close():", err)
-						}
-					}()
-					got, err := readPackfile(bufio.NewReader(resp.Packfile))
-					if err != nil {
-						t.Error(err)
-					}
-					want := map[githash.SHA1][]byte{
-						blobObjectID:        []byte(fileContent),
-						treeObject.SHA1():   mustMarshalBinary(t, treeObject),
-						commitObject.SHA1(): mustMarshalBinary(t, commitObject),
-					}
-					if diff := cmp.Diff(want, got); diff != "" {
-						t.Errorf("objects (-want +got):\n%s", diff)
-					}
+					u := transport.getURL(t, dir)
+					runFetchTest(ctx, t, u, version, objects)
 				})
 			}
 		})
 	}
+}
+
+func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, objects *fetchTestObjects) {
+	remote, err := NewRemote(u, nil)
+	if err != nil {
+		t.Fatal("NewRemote:", err)
+	}
+	if version == 1 {
+		remote.fetchExtraParams = v1ExtraParams
+	}
+	stream, err := remote.StartFetch(ctx)
+	if err != nil {
+		t.Fatal("remote.StartFetch:", err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error("stream.Close():", err)
+		}
+	}()
+
+	t.Run("ListRefs", func(t *testing.T) {
+		got, err := stream.ListRefs()
+		if err != nil {
+			t.Fatal("ListRefs:", err)
+		}
+		want := []*Ref{
+			{
+				Name:         githash.Head,
+				ObjectID:     objects.commit2.SHA1(),
+				SymrefTarget: objects.mainRef,
+			},
+			{
+				Name:     objects.mainRef,
+				ObjectID: objects.commit2.SHA1(),
+			},
+			{
+				Name:     objects.ref1,
+				ObjectID: objects.commit1.SHA1(),
+			},
+			{
+				Name:     objects.ref2,
+				ObjectID: objects.commit2.SHA1(),
+			},
+		}
+		diff := cmp.Diff(
+			want, got,
+			cmpopts.SortSlices(func(r1, r2 *Ref) bool { return r1.Name < r2.Name }),
+		)
+		if diff != "" {
+			t.Errorf("ListRefs() (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Negotiate/All", func(t *testing.T) {
+		resp, err := stream.Negotiate(&FetchRequest{
+			Want: []githash.SHA1{objects.commit2.SHA1()},
+		})
+		if err != nil {
+			t.Fatal("stream.Negotiate:", err)
+		}
+		if resp.Packfile == nil {
+			t.Fatal("stream.Negotiate returned nil Packfile")
+		}
+		defer func() {
+			if err := resp.Packfile.Close(); err != nil {
+				t.Error("resp.Packfile.Close():", err)
+			}
+		}()
+		got, err := readPackfile(bufio.NewReader(resp.Packfile))
+		if err != nil {
+			t.Error(err)
+		}
+		want := map[githash.SHA1][]byte{
+			objects.blobObjectID(): objects.blobContent,
+			objects.tree1.SHA1():   mustMarshalBinary(t, objects.tree1),
+			objects.commit1.SHA1(): mustMarshalBinary(t, objects.commit1),
+			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
+			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("objects (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Negotiate/First", func(t *testing.T) {
+		resp, err := stream.Negotiate(&FetchRequest{
+			Want: []githash.SHA1{objects.commit1.SHA1()},
+		})
+		if err != nil {
+			t.Fatal("stream.Negotiate:", err)
+		}
+		if resp.Packfile == nil {
+			t.Fatal("stream.Negotiate returned nil Packfile")
+		}
+		defer func() {
+			if err := resp.Packfile.Close(); err != nil {
+				t.Error("resp.Packfile.Close():", err)
+			}
+		}()
+		got, err := readPackfile(bufio.NewReader(resp.Packfile))
+		if err != nil {
+			t.Error(err)
+		}
+		want := map[githash.SHA1][]byte{
+			objects.blobObjectID(): objects.blobContent,
+			objects.tree1.SHA1():   mustMarshalBinary(t, objects.tree1),
+			objects.commit1.SHA1(): mustMarshalBinary(t, objects.commit1),
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("objects (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Negotiate/Second", func(t *testing.T) {
+		resp, err := stream.Negotiate(&FetchRequest{
+			Want: []githash.SHA1{objects.commit2.SHA1()},
+			Have: []githash.SHA1{objects.commit1.SHA1()},
+		})
+		if err != nil {
+			t.Fatal("stream.Negotiate:", err)
+		}
+		if resp.Packfile == nil {
+			t.Fatal("stream.Negotiate returned nil Packfile")
+		}
+		defer func() {
+			if err := resp.Packfile.Close(); err != nil {
+				t.Error("resp.Packfile.Close():", err)
+			}
+		}()
+		got, err := readPackfile(bufio.NewReader(resp.Packfile))
+		if err != nil {
+			t.Error(err)
+		}
+		want := map[githash.SHA1][]byte{
+			// objects.blobObjectID(): objects.blobContent,
+			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
+			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("objects (-want +got):\n%s", diff)
+		}
+	})
+}
+
+type fetchTestObjects struct {
+	mainRef     githash.Ref
+	blobContent []byte
+	tree1       object.Tree
+	tree2       object.Tree
+	commit1     *object.Commit
+	commit2     *object.Commit
+	ref1        githash.Ref
+	ref2        githash.Ref
+}
+
+func initFetchTestRepository(ctx context.Context, g *git.Git, dir string) (*fetchTestObjects, error) {
+	g = g.WithDir(dir)
+	if err := g.Init(ctx, "."); err != nil {
+		return nil, err
+	}
+	mainRef, err := g.HeadRef(ctx)
+	if err != nil {
+		return nil, err
+	}
+	const filename1 = "1.txt"
+	const fileContent = "Hello, World!\n"
+	err = ioutil.WriteFile(filepath.Join(dir, filename1), []byte(fileContent), 0o666)
+	if err != nil {
+		return nil, err
+	}
+	err = g.Add(ctx, []git.Pathspec{git.LiteralPath(filename1)}, git.AddOptions{})
+	if err != nil {
+		return nil, err
+	}
+	const commitMessage1 = "Initial import"
+	const author object.User = "Octocat <octocat@example.com>"
+	commitTime1 := time.Date(2020, time.January, 9, 14, 50, 0, 0, time.FixedZone("-0800", -8*60*60))
+	err = g.Commit(ctx, commitMessage1, git.CommitOptions{
+		Author:     author,
+		AuthorTime: commitTime1,
+		Committer:  author,
+		CommitTime: commitTime1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	const tag1 = "tag1"
+	if err := g.Run(ctx, "tag", tag1); err != nil {
+		return nil, err
+	}
+
+	const filename2 = "2.txt"
+	err = ioutil.WriteFile(filepath.Join(dir, filename2), []byte(fileContent), 0o666)
+	if err != nil {
+		return nil, err
+	}
+	err = g.Add(ctx, []git.Pathspec{git.LiteralPath(filename2)}, git.AddOptions{})
+	if err != nil {
+		return nil, err
+	}
+	const commitMessage2 = "Added another file"
+	commitTime2 := time.Date(2020, time.January, 9, 15, 25, 0, 0, time.FixedZone("-0800", -8*60*60))
+	err = g.Commit(ctx, commitMessage2, git.CommitOptions{
+		Author:     author,
+		AuthorTime: commitTime2,
+		Committer:  author,
+		CommitTime: commitTime2,
+	})
+	if err != nil {
+		return nil, err
+	}
+	const tag2 = "tag2"
+	if err := g.Run(ctx, "tag", tag2); err != nil {
+		return nil, err
+	}
+
+	objects := &fetchTestObjects{
+		mainRef:     mainRef,
+		blobContent: []byte(fileContent),
+		ref1:        git.TagRef(tag1),
+		ref2:        git.TagRef(tag2),
+	}
+	objects.tree1 = object.Tree{
+		{
+			Name:     filename1,
+			Mode:     object.ModePlain,
+			ObjectID: objects.blobObjectID(),
+		},
+	}
+	objects.commit1 = &object.Commit{
+		Tree:       objects.tree1.SHA1(),
+		Author:     author,
+		AuthorTime: commitTime1,
+		Committer:  author,
+		CommitTime: commitTime1,
+		Message:    commitMessage1,
+	}
+	objects.tree2 = object.Tree{
+		{
+			Name:     filename1,
+			Mode:     object.ModePlain,
+			ObjectID: objects.blobObjectID(),
+		},
+		{
+			Name:     filename2,
+			Mode:     object.ModePlain,
+			ObjectID: objects.blobObjectID(),
+		},
+	}
+	objects.commit2 = &object.Commit{
+		Tree:       objects.tree2.SHA1(),
+		Parents:    []githash.SHA1{objects.commit1.SHA1()},
+		Author:     author,
+		AuthorTime: commitTime2,
+		Committer:  author,
+		CommitTime: commitTime2,
+		Message:    commitMessage2,
+	}
+	return objects, nil
+}
+
+func (objects *fetchTestObjects) blobObjectID() githash.SHA1 {
+	id, err := object.BlobSum(bytes.NewReader(objects.blobContent), int64(len(objects.blobContent)))
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 func readPackfile(r packfile.ByteReader) (map[githash.SHA1][]byte, error) {

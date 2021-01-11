@@ -25,7 +25,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"os"
 
 	"gg-scm.io/pkg/git/internal/pktline"
 )
