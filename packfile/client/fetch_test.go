@@ -26,8 +26,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,12 +48,13 @@ import (
 func TestFetch(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	g, err := git.New(git.Options{
+	localGit, err := git.NewLocal(git.Options{
 		Dir: dir,
 	})
 	if err != nil {
 		t.Skip("Can't find Git, skipping:", err)
 	}
+	g := git.Custom(dir, localGit, localGit)
 	if err := g.Init(ctx, "."); err != nil {
 		t.Fatal(err)
 	}
@@ -98,77 +104,77 @@ func TestFetch(t *testing.T) {
 		CommitTime: commitTime,
 		Message:    commitMessage,
 	}
-	remoteURL := &url.URL{
-		Scheme: "file",
-		Path:   filepath.FromSlash(dir),
-	}
 
-	for version := 1; version <= 2; version++ {
-		t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
-			remote, err := NewRemote(remoteURL, nil)
-			if err != nil {
-				t.Fatal("NewRemote:", err)
-			}
-			if version == 1 {
-				remote.fetchExtraParams = v1ExtraParams
-			}
-			stream, err := remote.StartFetch(ctx)
-			if err != nil {
-				t.Fatal("remote.StartFetch:", err)
-			}
-			defer func() {
-				if err := stream.Close(); err != nil {
-					t.Error("stream.Close():", err)
-				}
-			}()
-			if gotRefs, err := stream.ListRefs(); err != nil {
-				t.Error("ListRefs:", err)
-			} else {
-				wantHeadTarget := mainRef
-				wantRefs := []*Ref{
-					{
-						Name:         githash.Head,
-						ObjectID:     commitObject.SHA1(),
-						SymrefTarget: wantHeadTarget,
-					},
-					{
-						Name:     mainRef,
-						ObjectID: commitObject.SHA1(),
-					},
-				}
-				diff := cmp.Diff(
-					wantRefs, gotRefs,
-					cmpopts.SortSlices(func(r1, r2 *Ref) bool { return r1.Name < r2.Name }),
-				)
-				if diff != "" {
-					t.Errorf("ListRefs() (-want +got):\n%s", diff)
-				}
-			}
-			resp, err := stream.Negotiate(&FetchRequest{
-				Want: []githash.SHA1{commitObject.SHA1()},
-			})
-			if err != nil {
-				t.Fatal("stream.Negotiate:", err)
-			}
-			if resp.Packfile == nil {
-				t.Fatal("stream.Negotiate returned nil Packfile")
-			}
-			defer func() {
-				if err := resp.Packfile.Close(); err != nil {
-					t.Error("stream.Close():", err)
-				}
-			}()
-			got, err := readPackfile(bufio.NewReader(resp.Packfile))
-			if err != nil {
-				t.Error(err)
-			}
-			want := map[githash.SHA1][]byte{
-				blobObjectID:        []byte(fileContent),
-				treeObject.SHA1():   mustMarshalBinary(t, treeObject),
-				commitObject.SHA1(): mustMarshalBinary(t, commitObject),
-			}
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("objects (-want +got):\n%s", diff)
+	for _, transport := range allTransportVariants(localGit.Exe()) {
+		t.Run(transport.name, func(t *testing.T) {
+			for version := 1; version <= 2; version++ {
+				t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
+					remote, err := NewRemote(transport.getURL(t, dir), nil)
+					if err != nil {
+						t.Fatal("NewRemote:", err)
+					}
+					if version == 1 {
+						remote.fetchExtraParams = v1ExtraParams
+					}
+					stream, err := remote.StartFetch(ctx)
+					if err != nil {
+						t.Fatal("remote.StartFetch:", err)
+					}
+					defer func() {
+						if err := stream.Close(); err != nil {
+							t.Error("stream.Close():", err)
+						}
+					}()
+					if gotRefs, err := stream.ListRefs(); err != nil {
+						t.Error("ListRefs:", err)
+					} else {
+						wantHeadTarget := mainRef
+						wantRefs := []*Ref{
+							{
+								Name:         githash.Head,
+								ObjectID:     commitObject.SHA1(),
+								SymrefTarget: wantHeadTarget,
+							},
+							{
+								Name:     mainRef,
+								ObjectID: commitObject.SHA1(),
+							},
+						}
+						diff := cmp.Diff(
+							wantRefs, gotRefs,
+							cmpopts.SortSlices(func(r1, r2 *Ref) bool { return r1.Name < r2.Name }),
+						)
+						if diff != "" {
+							t.Errorf("ListRefs() (-want +got):\n%s", diff)
+						}
+					}
+					resp, err := stream.Negotiate(&FetchRequest{
+						Want: []githash.SHA1{commitObject.SHA1()},
+					})
+					if err != nil {
+						t.Fatal("stream.Negotiate:", err)
+					}
+					if resp.Packfile == nil {
+						t.Fatal("stream.Negotiate returned nil Packfile")
+					}
+					defer func() {
+						if err := resp.Packfile.Close(); err != nil {
+							t.Error("stream.Close():", err)
+						}
+					}()
+					got, err := readPackfile(bufio.NewReader(resp.Packfile))
+					if err != nil {
+						t.Error(err)
+					}
+					want := map[githash.SHA1][]byte{
+						blobObjectID:        []byte(fileContent),
+						treeObject.SHA1():   mustMarshalBinary(t, treeObject),
+						commitObject.SHA1(): mustMarshalBinary(t, commitObject),
+					}
+					if diff := cmp.Diff(want, got); diff != "" {
+						t.Errorf("objects (-want +got):\n%s", diff)
+					}
+				})
 			}
 		})
 	}
@@ -216,4 +222,73 @@ func mustMarshalBinary(tb testing.TB, m encoding.BinaryMarshaler) []byte {
 		tb.Fatal("MarshalBinary:", err)
 	}
 	return data
+}
+
+type transportVariant struct {
+	name   string
+	getURL func(tb testing.TB, dir string) *url.URL
+}
+
+func allTransportVariants(gitExe string) []transportVariant {
+	return []transportVariant{
+		{"Local", func(_ testing.TB, dir string) *url.URL {
+			return &url.URL{
+				Scheme: "file",
+				Path:   filepath.FromSlash(dir),
+			}
+		}},
+		{"HTTP", func(tb testing.TB, dir string) *url.URL {
+			httpServer := serveHTTPRepository(gitExe, dir)
+			tb.Cleanup(httpServer.Close)
+			u, err := ParseURL(httpServer.URL)
+			if err != nil {
+				tb.Fatal(err)
+			}
+			return u
+		}},
+	}
+}
+
+func serveHTTPRepository(gitExe string, dir string) *httptest.Server {
+	// https://git-scm.com/docs/git-http-backend
+	gitServer := &cgi.Handler{
+		Dir:  dir,
+		Path: gitExe,
+		Args: []string{"-c", "http.receivepack=true", "http-backend"},
+		Env: []string{
+			"GIT_HTTP_EXPORT_ALL=true",
+			"GIT_PROJECT_ROOT=" + dir,
+		},
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TransferEncoding) > 0 && r.TransferEncoding[0] == "chunked" {
+			// Go's net/http/cgi server doesn't support chunked encoding, which is
+			// a non-standard CGI feature that Apache supports. https://golang.org/issue/5613
+			// We're okay with a really inefficient implementation for tests.
+			bodyFile, err := ioutil.TempFile("", "git-server-body")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer func() {
+				path := bodyFile.Name()
+				bodyFile.Close()
+				os.Remove(path)
+			}()
+			size, err := io.Copy(bodyFile, r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if _, err := bodyFile.Seek(0, io.SeekStart); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			r = r.Clone(r.Context())
+			r.TransferEncoding = nil
+			r.Header.Set("Content-Length", strconv.FormatInt(size, 10))
+			r.Body = bodyFile
+		}
+		gitServer.ServeHTTP(w, r)
+	}))
 }

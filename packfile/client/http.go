@@ -25,6 +25,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 
 	"gg-scm.io/pkg/git/internal/pktline"
 )
@@ -269,7 +270,8 @@ func (conn *httpReceivePackConn) start() {
 			URL:    conn.remote.url("/git-receive-pack", nil),
 			Body:   pr,
 			Header: http.Header{
-				"Expect": {"100-continue"},
+				"Content-Type": {"application/x-git-receive-pack-request"},
+				"Expect":       {"100-continue"},
 			},
 		})
 		if err != nil {
