@@ -182,7 +182,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 		}
 	})
 
-	t.Run("Negotiate/Second", func(t *testing.T) {
+	t.Run("Negotiate/Incremental", func(t *testing.T) {
 		resp, err := stream.Negotiate(&FetchRequest{
 			Want: []githash.SHA1{objects.commit2.SHA1()},
 			Have: []githash.SHA1{objects.commit1.SHA1()},
@@ -203,7 +203,36 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 			t.Error(err)
 		}
 		want := map[githash.SHA1][]byte{
-			// objects.blobObjectID(): objects.blobContent,
+			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
+			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("objects (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Negotiate/ShallowSecond", func(t *testing.T) {
+		resp, err := stream.Negotiate(&FetchRequest{
+			Want:  []githash.SHA1{objects.commit2.SHA1()},
+			Depth: 1,
+		})
+		if err != nil {
+			t.Fatal("stream.Negotiate:", err)
+		}
+		if resp.Packfile == nil {
+			t.Fatal("stream.Negotiate returned nil Packfile")
+		}
+		defer func() {
+			if err := resp.Packfile.Close(); err != nil {
+				t.Error("resp.Packfile.Close():", err)
+			}
+		}()
+		got, err := readPackfile(bufio.NewReader(resp.Packfile))
+		if err != nil {
+			t.Error(err)
+		}
+		want := map[githash.SHA1][]byte{
+			objects.blobObjectID(): objects.blobContent,
 			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
 			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
 		}

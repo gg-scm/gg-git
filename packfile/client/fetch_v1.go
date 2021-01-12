@@ -33,6 +33,23 @@ import (
 
 const v1ExtraParams = "version=1"
 
+// Capability names. See https://git-scm.com/docs/protocol-capabilities
+const (
+	deepenRelativeCap = "deepen-relative"
+	deepenSinceCap    = "deepen-since"
+	deepenNotCap      = "deepen-not"
+	filterCap         = "filter"
+	includeTagCap     = "include-tag"
+	multiAckCap       = "multi_ack"
+	noProgressCap     = "no-progress"
+	ofsDeltaCap       = "ofs-delta"
+	shallowCap        = "shallow"
+	sideBand64KCap    = "side-band-64k"
+	sideBandCap       = "side-band"
+	symrefCap         = "symref"
+	thinPackCap       = "thin-pack"
+)
+
 type fetchV1 struct {
 	caps       capabilityList
 	impl       impl
@@ -206,46 +223,38 @@ func parseOtherRefV1(line []byte) (*Ref, error) {
 	}, nil
 }
 
-func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error) {
-	// Determine which capabilities we can use.
-	useCaps := capabilityList{
-		includeTagCap: "",
-		multiAckCap:   "",
-		ofsDeltaCap:   "",
+func (f *fetchV1) capabilities() FetchCapabilities {
+	caps := FetchCapabilities(0)
+	if f.caps.supports(shallowCap) {
+		caps |= FetchCapShallow
 	}
-	if req.Progress == nil {
-		useCaps[noProgressCap] = ""
+	if f.caps.supports(deepenRelativeCap) {
+		caps |= FetchCapDepthRelative
 	}
-	useCaps.intersect(f.caps)
-	// From https://git-scm.com/docs/protocol-capabilities, "[t]he client MUST
-	// send only maximum [sic] of one of 'side-band' and [sic] 'side-band-64k'."
-	switch {
-	case f.caps.supports(sideBand64KCap):
-		useCaps[sideBand64KCap] = ""
-	case f.caps.supports(sideBandCap):
-		useCaps[sideBandCap] = ""
-	default:
-		// TODO(someday): Support reading without demuxing.
-		return nil, fmt.Errorf("remote does not support side-band")
+	if f.caps.supports(deepenSinceCap) {
+		caps |= FetchCapSince
 	}
-	if req.IncludeTag && !f.caps.supports(includeTagCap) {
-		return nil, fmt.Errorf("remote does not support include-tag")
+	if f.caps.supports(deepenNotCap) {
+		caps |= FetchCapShallowExclude
 	}
+	if f.caps.supports(filterCap) {
+		caps |= FetchCapFilter
+	}
+	if f.caps.supports(includeTagCap) {
+		caps |= FetchCapIncludeTag
+	}
+	if f.caps.supports(thinPackCap) {
+		caps |= FetchCapThinPack
+	}
+	return caps
+}
 
-	var commandBuf []byte
-	commandBuf = pktline.AppendString(commandBuf, fmt.Sprintf("want %v %v\n", req.Want[0], useCaps))
-	for _, want := range req.Want[1:] {
-		commandBuf = pktline.AppendString(commandBuf, "want "+want.String()+"\n")
+func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error) {
+	useCaps, err := capabilitiesToSendV1(req, f.caps)
+	if err != nil {
+		return nil, err
 	}
-	commandBuf = pktline.AppendFlush(commandBuf)
-	for _, have := range req.Have {
-		commandBuf = pktline.AppendString(commandBuf, "have "+have.String()+"\n")
-	}
-	if !req.HaveMore {
-		commandBuf = pktline.AppendString(commandBuf, "done")
-	} else {
-		commandBuf = pktline.AppendFlush(commandBuf)
-	}
+	commandBuf := formatUploadRequestV1(req, useCaps)
 	resp, err := f.impl.uploadPack(ctx, v1ExtraParams, bytes.NewReader(commandBuf))
 	if err != nil {
 		return nil, err
@@ -258,14 +267,149 @@ func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchReq
 
 	respReader := pktline.NewReader(resp)
 	result := &FetchResponse{
-		Acks: make(map[githash.SHA1]bool),
+		Acks: make(map[githash.SHA1]struct{}),
 	}
-	foundCommonBase := false
-ackLoop:
-	for respReader.Next() {
-		line, err := respReader.Text()
+	if req.Depth > 0 || !req.Since.IsZero() || len(req.ShallowExclude) > 0 {
+		// "If the client sent a positive depth request, the server will determine
+		// which commits will and will not be shallow and send this information
+		// to the client."
+		var err error
+		result.Shallow, err = readShallowUpdateV1(respReader)
 		if err != nil {
-			return nil, fmt.Errorf("parse response: %w", err)
+			return nil, err
+		}
+	}
+	var foundCommonBase bool
+	result.Acks, foundCommonBase, err = readServerResponseV1(respReader)
+	if err != nil {
+		return nil, err
+	}
+	if foundCommonBase || !req.HaveMore {
+		result.Packfile = &packfileReader{
+			errPrefix:  errPrefix,
+			packReader: respReader,
+			packCloser: resp,
+			progress:   req.Progress,
+		}
+	}
+	return result, nil
+}
+
+func capabilitiesToSendV1(req *FetchRequest, remoteCaps capabilityList) (capabilityList, error) {
+	useCaps := capabilityList{
+		multiAckCap: "",
+		ofsDeltaCap: "",
+	}
+	if req.Progress == nil {
+		useCaps[noProgressCap] = ""
+	}
+	if req.needsShallow() {
+		useCaps[shallowCap] = ""
+	}
+	if req.needsDepthRelative() {
+		useCaps[deepenRelativeCap] = ""
+	}
+	if !req.Since.IsZero() {
+		useCaps[deepenSinceCap] = ""
+	}
+	if len(req.ShallowExclude) > 0 {
+		useCaps[deepenNotCap] = ""
+	}
+	if req.Filter != "" {
+		useCaps[filterCap] = ""
+	}
+	if req.IncludeTag {
+		useCaps[includeTagCap] = ""
+	}
+	if req.ThinPack {
+		useCaps[thinPackCap] = ""
+	}
+	useCaps.intersect(remoteCaps)
+	// From https://git-scm.com/docs/protocol-capabilities, "[t]he client MUST
+	// send only maximum [sic] of one of 'side-band' and [sic] 'side-band-64k'."
+	switch {
+	case remoteCaps.supports(sideBand64KCap):
+		useCaps[sideBand64KCap] = ""
+	case remoteCaps.supports(sideBandCap):
+		useCaps[sideBandCap] = ""
+	default:
+		// TODO(someday): Support reading without demuxing.
+		return nil, fmt.Errorf("remote does not support %s", sideBandCap)
+	}
+	return useCaps, nil
+}
+
+func formatUploadRequestV1(req *FetchRequest, useCaps capabilityList) []byte {
+	var buf []byte
+	buf = pktline.AppendString(buf, fmt.Sprintf("want %v %v\n", req.Want[0], useCaps))
+	for _, want := range req.Want[1:] {
+		buf = pktline.AppendString(buf, "want "+want.String()+"\n")
+	}
+	for _, shallow := range req.Shallow {
+		buf = pktline.AppendString(buf, "shallow "+shallow.String()+"\n")
+	}
+	if req.Depth > 0 {
+		buf = pktline.AppendString(buf, fmt.Sprintf("deepen %d\n", req.Depth))
+	}
+	if !req.Since.IsZero() {
+		buf = pktline.AppendString(buf, fmt.Sprintf("deepen-since %d\n", req.Since.Unix()))
+	}
+	for _, rev := range req.ShallowExclude {
+		buf = pktline.AppendString(buf, "deepen-not "+rev+"\n")
+	}
+	if req.Filter != "" {
+		buf = pktline.AppendString(buf, "filter "+req.Filter+"\n")
+	}
+	buf = pktline.AppendFlush(buf)
+
+	for _, have := range req.Have {
+		buf = pktline.AppendString(buf, "have "+have.String()+"\n")
+	}
+	if !req.HaveMore {
+		buf = pktline.AppendString(buf, "done")
+	} else {
+		buf = pktline.AppendFlush(buf)
+	}
+	return buf
+}
+
+func readShallowUpdateV1(r *pktline.Reader) (map[githash.SHA1]bool, error) {
+	result := make(map[githash.SHA1]bool)
+	for r.Next() && r.Type() != pktline.Flush {
+		line, err := r.Text()
+		if err != nil {
+			return nil, fmt.Errorf("parse shallow update: %w", err)
+		}
+		var commitID githash.SHA1
+		var isShallow bool
+		switch {
+		case bytes.HasPrefix(line, []byte(shallowPrefix)):
+			isShallow = true
+			if err := commitID.UnmarshalText(line[len(shallowPrefix):]); err != nil {
+				return nil, fmt.Errorf("parse shallow update: %w", err)
+			}
+		case bytes.HasPrefix(line, []byte(unshallowPrefix)):
+			isShallow = false
+			if err := commitID.UnmarshalText(line[len(unshallowPrefix):]); err != nil {
+				return nil, fmt.Errorf("parse shallow update: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("parse shallow update: unrecognized directive %q", line)
+		}
+		result[commitID] = isShallow
+	}
+	if err := r.Err(); err != nil {
+		return nil, fmt.Errorf("parse shallow update: %w", err)
+	}
+	return result, nil
+}
+
+func readServerResponseV1(r *pktline.Reader) (acks map[githash.SHA1]struct{}, foundCommonBase bool, err error) {
+	acks = make(map[githash.SHA1]struct{})
+	for r.Next() {
+		line, err := r.Text()
+		if err != nil {
+			return nil, false, fmt.Errorf("parse response: %w", err)
 		}
 		switch {
 		case bytes.HasPrefix(line, []byte(ackPrefix)):
@@ -278,34 +422,22 @@ ackLoop:
 			}
 			var id githash.SHA1
 			if err := id.UnmarshalText(line[:idEnd]); err != nil {
-				return nil, fmt.Errorf("parse response: acknowledgements: %w", err)
+				return nil, false, fmt.Errorf("parse response: acknowledgements: %w", err)
 			}
-			result.Acks[id] = true
+			acks[id] = struct{}{}
 			switch status := line[statusStart:]; {
 			case len(status) == 0:
-				foundCommonBase = true
-				break ackLoop
+				return acks, true, nil
 			case bytes.Equal(status, []byte("continue")):
 				// Only valid status for multi_ack
 			default:
-				return nil, fmt.Errorf("parse response: acknowledgements: unknown status %q", status)
+				return nil, false, fmt.Errorf("parse response: acknowledgements: unknown status %q", status)
 			}
 		case bytes.Equal(line, []byte(nak)):
-			break ackLoop
+			return acks, false, nil
 		default:
-			return nil, fmt.Errorf("parse response: acknowledgements: unrecognized directive %q", line)
+			return nil, false, fmt.Errorf("parse response: acknowledgements: unrecognized directive %q", line)
 		}
 	}
-	if err := respReader.Err(); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	if foundCommonBase || !req.HaveMore {
-		result.Packfile = &packfileReader{
-			errPrefix:  errPrefix,
-			packReader: respReader,
-			packCloser: resp,
-			progress:   req.Progress,
-		}
-	}
-	return result, nil
+	return nil, false, fmt.Errorf("parse response: %w", err)
 }

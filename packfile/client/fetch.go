@@ -23,6 +23,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/internal/pktline"
@@ -38,6 +39,7 @@ type FetchStream struct {
 type fetcher interface {
 	negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error)
 	listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error)
+	capabilities() FetchCapabilities
 	Close() error
 }
 
@@ -97,24 +99,76 @@ func (f *FetchStream) ListRefs(refPrefixes ...string) ([]*Ref, error) {
 	return refs, nil
 }
 
+// Capabilities returns the set of fetch request fields the remote supports.
+func (f *FetchStream) Capabilities() FetchCapabilities {
+	return f.impl.capabilities()
+}
+
 // A FetchRequest informs the remote which objects to include in the packfile.
 type FetchRequest struct {
-	// Want is the set of object IDs to send. At least one must be specified,
+	// Want is the set of commits to send. At least one must be specified,
 	// or SendRequest will return an error.
 	Want []githash.SHA1
-	// Have is the set of object IDs that the server can exclude from the
-	// packfile. It may be empty.
+	// Have is a set of commits that the remote can exclude from the packfile.
+	// It may be empty for a full clone. The remote will also avoid sending any
+	// trees and blobs used in the Have commits and any of their ancestors, even
+	// if they're used in returned commits.
 	Have []githash.SHA1
-	// If HaveMore is true, then the response will not return a Packfile if the
+	// If HaveMore is true, then the response will not return a packfile if the
 	// remote hasn't found a suitable base.
 	HaveMore bool
 
-	// IncludeTag indicates whether annotated tags should be sent if the objects
-	// they point to are being sent.
-	IncludeTag bool
 	// Progress will receive progress messages from the remote while the caller
 	// reads the packfile. It may be nil.
 	Progress io.Writer
+
+	// Shallow is the set of object IDs that the client does not have the parent
+	// commits of. This is only supported by the remote if it has FetchCapShallow.
+	Shallow []githash.SHA1
+
+	// If Depth is greater than zero, it limits the depth of the commits fetched.
+	// It is mutually exclusive with Since. This is only supported by the remote
+	// if it has FetchCapShallow.
+	Depth int
+	// If DepthRelative is true, Depth is interpreted as relative to the client's
+	// shallow boundary. Otherwise, it is interpreted as relative to the commits
+	// in Want. This is only supported by the remote if it has FetchCapDepthRelative.
+	DepthRelative bool
+	// Since requests that the shallow clone/fetch should be cut at a specific
+	// time. It is mutually exclusive with Depth.  This is only supported by the
+	// remote if it has FetchCapSince.
+	Since time.Time
+	// ShallowExclude is a set of revisions that the remote will exclude from
+	// the packfile. Unlike Have, the remote will send any needed trees and
+	// blobs even if they are shared with the revisions in ShallowExclude.
+	// It is mutually exclusive with Depth, but not Since. This is only supported
+	// by the remote if it has FetchCapShallowExclude.
+	ShallowExclude []string
+
+	// Filter filters objects in the packfile based on a filter-spec as defined
+	// in git-rev-list(1). This is only supported by the remote if it has FetchCapFilter.
+	Filter string
+
+	// IncludeTag indicates whether annotated tags should be sent if the objects
+	// they point to are being sent. This is only supported by the remote if it
+	// has FetchCapIncludeTag.
+	IncludeTag bool
+
+	// ThinPack requests that a thin pack be sent, which is a pack with deltas
+	// which reference base objects not contained within the pack (but are known
+	// to exist at the receiving end). This can reduce the network traffic
+	// significantly, but it requires the receiving end to know how to "thicken"
+	// these packs by adding the missing bases to the pack. This is only supported
+	// by the remote if it has FetchCapThinPack.
+	ThinPack bool
+}
+
+func (req *FetchRequest) needsShallow() bool {
+	return len(req.Shallow) > 0 || req.Depth > 0
+}
+
+func (req *FetchRequest) needsDepthRelative() bool {
+	return req.DepthRelative && req.Depth > 0
 }
 
 // A FetchResponse holds the remote response to a round of negotiation.
@@ -127,16 +181,54 @@ type FetchResponse struct {
 	Packfile io.ReadCloser
 	// Acks indicates which of the Have objects from the request that the remote
 	// shares. It may not be populated if Packfile is not nil.
-	Acks map[githash.SHA1]bool
+	Acks map[githash.SHA1]struct{}
+	// Shallow indicates each commit sent whose parents will not be in the
+	// packfile. If a commit hash is in the Shallow map but its value is false,
+	// it means that the request indicated the commit was shallow, but its parents
+	// are present in the packfile.
+	Shallow map[githash.SHA1]bool
 }
 
 // Negotiate requests a packfile from the remote. It must be called before
 // calling the Read method.
 func (f *FetchStream) Negotiate(req *FetchRequest) (*FetchResponse, error) {
+	// Validate request is self-consistent.
 	errPrefix := "fetch " + f.urlstr
 	if len(req.Want) == 0 {
 		return nil, fmt.Errorf("%s: no objects requested", errPrefix)
 	}
+	if req.Depth > 0 && !req.Since.IsZero() {
+		return nil, fmt.Errorf("%s: Depth used with Since", errPrefix)
+	}
+	if req.Depth > 0 && len(req.ShallowExclude) > 0 {
+		return nil, fmt.Errorf("%s: Depth used with ShallowExclude", errPrefix)
+	}
+
+	// Validate that request uses capabilities that the remote supports.
+	caps := f.impl.capabilities()
+	if (req.needsShallow()) && !caps.Has(FetchCapShallow) {
+		return nil, fmt.Errorf("%s: remote does not support shallow clones", errPrefix)
+	}
+	if req.needsDepthRelative() && !caps.Has(FetchCapDepthRelative) {
+		return nil, fmt.Errorf("%s: remote does not support relative depths", errPrefix)
+	}
+	if req.Since.IsZero() && !caps.Has(FetchCapSince) {
+		return nil, fmt.Errorf("%s: remote does not support shallow-since", errPrefix)
+	}
+	if len(req.ShallowExclude) > 0 && !caps.Has(FetchCapShallowExclude) {
+		return nil, fmt.Errorf("%s: remote does not support shallow revision exclusions", errPrefix)
+	}
+	if req.Filter != "" && !caps.Has(FetchCapFilter) {
+		return nil, fmt.Errorf("%s: remote does not support object filters", errPrefix)
+	}
+	if req.IncludeTag && !caps.Has(FetchCapIncludeTag) {
+		return nil, fmt.Errorf("%s: remote does not support include-tag", errPrefix)
+	}
+	if req.ThinPack && !caps.Has(FetchCapThinPack) {
+		return nil, fmt.Errorf("%s: remote does not support thin packs", errPrefix)
+	}
+
+	// Call negotiate.
 	resp, err := f.impl.negotiate(f.ctx, errPrefix, req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
@@ -224,16 +316,65 @@ func (f *packfileReader) Close() error {
 	return f.packCloser.Close()
 }
 
-// Capability names. See https://git-scm.com/docs/protocol-capabilities
+// FetchCapabilities is a bitset of capabilities that a remote supports for fetching.
+type FetchCapabilities uint64
+
+// Fetch capabilities.
+// See https://git-scm.com/docs/protocol-capabilities for descriptions.
 const (
-	includeTagCap  = "include-tag"
-	multiAckCap    = "multi_ack"
-	noProgressCap  = "no-progress"
-	ofsDeltaCap    = "ofs-delta"
-	sideBand64KCap = "side-band-64k"
-	sideBandCap    = "side-band"
-	symrefCap      = "symref"
+	FetchCapShallow        FetchCapabilities = 1 << iota // shallow
+	FetchCapDepthRelative                                // deepen-relative
+	FetchCapSince                                        // deepen-since
+	FetchCapShallowExclude                               // deepen-not
+	FetchCapFilter                                       // filter
+	FetchCapIncludeTag                                   // include-tag
+	FetchCapThinPack                                     // thin-pack
+
+	maxFetchCapBit
 )
+
+// Has reports whether caps includes all of the capabilities in mask.
+func (caps FetchCapabilities) Has(mask FetchCapabilities) bool {
+	return caps&mask == mask
+}
+
+// String returns a |-separated list of the capability constant names present
+// in caps.
+func (caps FetchCapabilities) String() string {
+	sb := new(strings.Builder)
+	for bit := FetchCapabilities(1); bit < maxFetchCapBit; bit <<= 1 {
+		if !caps.Has(bit) {
+			continue
+		}
+		if sb.Len() > 0 {
+			sb.WriteString("|")
+		}
+		switch bit {
+		case FetchCapShallow:
+			sb.WriteString("FetchCapShallow")
+		case FetchCapDepthRelative:
+			sb.WriteString("FetchCapDepthRelative")
+		case FetchCapSince:
+			sb.WriteString("FetchCapSince")
+		case FetchCapShallowExclude:
+			sb.WriteString("FetchCapShallowExclude")
+		case FetchCapFilter:
+			sb.WriteString("FetchCapFilter")
+		case FetchCapIncludeTag:
+			sb.WriteString("FetchCapIncludeTag")
+		case FetchCapThinPack:
+			sb.WriteString("FetchCapThinPack")
+		}
+		caps &^= bit
+	}
+	if caps != 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("|")
+		}
+		fmt.Fprintf(sb, "%#x", uint64(caps))
+	}
+	return sb.String()
+}
 
 // capabilityList is a set of capability tokens.
 // See https://git-scm.com/docs/protocol-capabilities

@@ -19,6 +19,7 @@ package client_test
 import (
 	"bufio"
 	"context"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"io"
@@ -95,10 +96,14 @@ func ExampleFetchStream_clone() {
 			// handle error
 		}
 		if hdr.Type == packfile.Commit {
-			commitID, err := object.BlobSum(packReader, hdr.Size)
-			if err != nil {
+			// Hash the object to get the ID.
+			h := sha1.New()
+			h.Write(object.AppendPrefix(nil, object.TypeCommit, hdr.Size))
+			if _, err := io.Copy(h, packReader); err != nil {
 				// handle error
 			}
+			var commitID githash.SHA1
+			h.Sum(commitID[:0])
 			fmt.Println(commitID)
 		}
 	}
@@ -163,13 +168,84 @@ func ExampleFetchStream_singleRef() {
 			// handle error
 		}
 		if hdr.Type == packfile.Commit {
-			commitID, err := object.BlobSum(packReader, hdr.Size)
-			if err != nil {
+			// Hash the object to get the ID.
+			h := sha1.New()
+			h.Write(object.AppendPrefix(nil, object.TypeCommit, hdr.Size))
+			if _, err := io.Copy(h, packReader); err != nil {
 				// handle error
 			}
+			var commitID githash.SHA1
+			h.Sum(commitID[:0])
 			fmt.Println(commitID)
 		}
 	}
+}
+
+// This example connects to a remote and requests only the objects for a
+// single commit.
+func ExampleFetchStream_singleCommit() {
+	// Create a remote for the URL.
+	ctx := context.Background()
+	u, err := client.ParseURL("https://github.com/gg-scm/gg-git.git")
+	if err != nil {
+		// handle error
+	}
+	remote, err := client.NewRemote(u, nil)
+	if err != nil {
+		// handle error
+	}
+
+	// Open a connection for fetching objects.
+	stream, err := remote.StartFetch(ctx)
+	if err != nil {
+		// handle error
+	}
+	defer stream.Close()
+	if !stream.Capabilities().Has(client.FetchCapShallow) {
+		fmt.Fprintln(os.Stderr, "Remote does not support shallow clones!")
+		return
+	}
+
+	// Start fetching from remote.
+	want, err := githash.ParseSHA1("c8ede9119a7188f2564d3b7257fa526c9285c23f")
+	if err != nil {
+		// handle error
+	}
+	response, err := stream.Negotiate(&client.FetchRequest{
+		Want:     []githash.SHA1{want},
+		Depth:    1,
+		Progress: os.Stderr,
+	})
+	if err != nil {
+		// handle error
+	}
+	defer response.Packfile.Close()
+
+	// Read the packfile and print commit IDs.
+	packReader := packfile.NewReader(bufio.NewReader(response.Packfile))
+	for {
+		hdr, err := packReader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			// handle error
+		}
+		if hdr.Type == packfile.Commit {
+			// Hash the object to get the ID.
+			h := sha1.New()
+			h.Write(object.AppendPrefix(nil, object.TypeCommit, hdr.Size))
+			if _, err := io.Copy(h, packReader); err != nil {
+				// handle error
+			}
+			var commitID githash.SHA1
+			h.Sum(commitID[:0])
+			fmt.Println(commitID)
+		}
+	}
+
+	// Output:
+	// c8ede9119a7188f2564d3b7257fa526c9285c23f
 }
 
 func ExamplePushStream() {
