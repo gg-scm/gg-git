@@ -240,6 +240,28 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 			t.Errorf("objects (-want +got):\n%s", diff)
 		}
 	})
+
+	t.Run("Negotiate/HaveMore", func(t *testing.T) {
+		randomHash, err := githash.ParseSHA1("ccfe3cfa687f0ea735937a81454d21fef86cdce8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := stream.Negotiate(&FetchRequest{
+			Want:     []githash.SHA1{objects.commit2.SHA1()},
+			Have:     []githash.SHA1{randomHash},
+			HaveMore: true,
+		})
+		if err != nil {
+			t.Fatal("stream.Negotiate:", err)
+		}
+		if resp.Packfile != nil {
+			resp.Packfile.Close()
+			t.Fatal("stream.Negotiate returned non-nil Packfile")
+		}
+		if _, remoteHasRandomHash := resp.Acks[randomHash]; remoteHasRandomHash {
+			t.Error("Remote acknowledged random hash")
+		}
+	})
 }
 
 type fetchTestObjects struct {
