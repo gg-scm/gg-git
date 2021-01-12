@@ -25,6 +25,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"gg-scm.io/pkg/git/internal/pktline"
 )
@@ -101,12 +102,26 @@ func (r *httpRemote) advertiseRefs(ctx context.Context, extraParams string) (_ i
 	if contentType := resp.Header.Get("Content-Type"); contentType != "application/x-git-upload-pack-advertisement" {
 		return nil, fmt.Errorf("content-type is %q, not git upload pack", contentType)
 	}
-	respReader := pktline.NewReader(resp.Body)
+	buf := new(bytes.Buffer) // in case we need to replay. See below.
+	respReader := pktline.NewReader(io.TeeReader(resp.Body, buf))
 	const want = "# service=git-upload-pack"
 	respReader.Next()
-	if line, err := respReader.Text(); err != nil {
-		return nil, err
-	} else if !bytes.Equal(line, []byte(want)) {
+	line, err := respReader.Text()
+	if err != nil {
+		return nil, fmt.Errorf("initial packet: %w", err)
+	}
+	if !bytes.Equal(line, []byte(want)) {
+		// For version 2, git-http-backend 2.20.1 will not send the opening line,
+		// but GitHub will. The documentation is ambiguous as to whether this line
+		// should be included.
+		// Discussion upstream: https://public-inbox.org/git/CAEs=z9Pajgjnq56+umA+g9-NFv-Rzo9m5sa-7cow_byckLiJ0A@mail.gmail.com/
+		//
+		// Trying to balance this with the http-protocol guidance that "clients MUST
+		// verify the first pkt-line is # service=$servicename", we permit this if
+		// we're sending V2.
+		if specifiesVersion2(extraParams) {
+			return readCloserCombiner{io.MultiReader(buf, resp.Body), resp.Body}, nil
+		}
 		return nil, fmt.Errorf("invalid initial packet")
 	}
 	if !respReader.Next() {
@@ -312,4 +327,18 @@ func (conn *httpReceivePackConn) Close() error {
 		return fmt.Errorf("receive-pack: %w", conn.respError)
 	}
 	return conn.respBody.Close()
+}
+
+func specifiesVersion2(extraParams string) bool {
+	for _, param := range strings.Split(extraParams, ":") {
+		if param == v2ExtraParams {
+			return true
+		}
+	}
+	return false
+}
+
+type readCloserCombiner struct {
+	io.Reader
+	io.Closer
 }

@@ -338,6 +338,31 @@ func (objects *fetchTestObjects) blobObjectID() githash.SHA1 {
 	return id
 }
 
+func TestFetchGitHubRepository(t *testing.T) {
+	t.Skip("Not hermetic. Test intended for manual development.")
+	r, err := NewRemote(&url.URL{
+		Scheme: "https",
+		Host:   "github.com",
+		Path:   "/git/git.git",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	stream, err := r.StartFetch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	refs, err := stream.ListRefs("refs/heads/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range refs {
+		t.Log(r.Name.Branch())
+	}
+}
+
 func readPackfile(r packfile.ByteReader) (map[githash.SHA1][]byte, error) {
 	pr := packfile.NewReader(r)
 	objects := make(map[githash.SHA1][]byte)
@@ -409,15 +434,6 @@ func allTransportVariants(gitExe string) []transportVariant {
 
 func serveHTTPRepository(gitExe string, dir string) *httptest.Server {
 	// https://git-scm.com/docs/git-http-backend
-	gitServer := &cgi.Handler{
-		Dir:  dir,
-		Path: gitExe,
-		Args: []string{"-c", "http.receivepack=true", "http-backend"},
-		Env: []string{
-			"GIT_HTTP_EXPORT_ALL=true",
-			"GIT_PROJECT_ROOT=" + dir,
-		},
-	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.TransferEncoding) > 0 && r.TransferEncoding[0] == "chunked" {
 			// Go's net/http/cgi server doesn't support chunked encoding, which is
@@ -446,6 +462,20 @@ func serveHTTPRepository(gitExe string, dir string) *httptest.Server {
 			r.TransferEncoding = nil
 			r.Header.Set("Content-Length", strconv.FormatInt(size, 10))
 			r.Body = bodyFile
+		}
+		gitServer := &cgi.Handler{
+			Dir:  dir,
+			Path: gitExe,
+			Args: []string{"-c", "http.receivepack=true", "http-backend"},
+			Env: []string{
+				"GIT_HTTP_EXPORT_ALL=true",
+				"GIT_PROJECT_ROOT=" + dir,
+				// Bafflingly, git-http-backend does not set GIT_PROTOCOL from
+				// HTTP_GIT_PROTOCOL. The canonical solution is to have the CGI
+				// environment do it.
+				// https://github.com/git/git/blob/74b082ad34fe2c727c676dac5c33d5e1e5f5ca56/t/lib-httpd/apache.conf#L84-L84
+				"GIT_PROTOCOL=" + r.Header.Get("Git-Protocol"),
+			},
 		}
 		gitServer.ServeHTTP(w, r)
 	}))
