@@ -46,7 +46,7 @@ func ExampleNewRemote() {
 
 // This example connects to a remote, lists all the refs, and requests for them
 // all to be downloaded. This is suitable for performing the initial clone.
-func ExampleFetchStream_clone() {
+func ExamplePullStream_clone() {
 	// Create a remote for the URL.
 	ctx := context.Background()
 	u, err := client.ParseURL("https://example.com/my/repo.git")
@@ -58,14 +58,14 @@ func ExampleFetchStream_clone() {
 		// handle error
 	}
 
-	// Open a connection for fetching objects.
-	stream, err := remote.StartFetch(ctx)
+	// Open a connection for pulling objects.
+	stream, err := remote.StartPull(ctx)
 	if err != nil {
 		// handle error
 	}
 	defer stream.Close()
 
-	// Gather object IDs to fetch.
+	// Gather object IDs to pull.
 	refs, err := stream.ListRefs()
 	if err != nil {
 		// handle error
@@ -75,8 +75,8 @@ func ExampleFetchStream_clone() {
 		want = append(want, r.ObjectID)
 	}
 
-	// Start fetching from remote.
-	response, err := stream.Negotiate(&client.FetchRequest{
+	// Start pulling from remote.
+	response, err := stream.Negotiate(&client.PullRequest{
 		Want:     want,
 		Progress: os.Stdout,
 	})
@@ -111,7 +111,7 @@ func ExampleFetchStream_clone() {
 
 // This example connects to a remote, finds a single desired ref, and requests
 // only objects for that ref to be downloaded.
-func ExampleFetchStream_singleRef() {
+func ExamplePullStream_singleRef() {
 	// Create a remote for the URL.
 	ctx := context.Background()
 	u, err := client.ParseURL("https://example.com/my/repo.git")
@@ -123,14 +123,14 @@ func ExampleFetchStream_singleRef() {
 		// handle error
 	}
 
-	// Open a connection for fetching objects.
-	stream, err := remote.StartFetch(ctx)
+	// Open a connection for pulling objects.
+	stream, err := remote.StartPull(ctx)
 	if err != nil {
 		// handle error
 	}
 	defer stream.Close()
 
-	// Find the HEAD ref to fetch.
+	// Find the HEAD ref to pull.
 	refs, err := stream.ListRefs()
 	if err != nil {
 		// handle error
@@ -147,8 +147,8 @@ func ExampleFetchStream_singleRef() {
 		return
 	}
 
-	// Start fetching from remote.
-	response, err := stream.Negotiate(&client.FetchRequest{
+	// Start pulling from remote.
+	response, err := stream.Negotiate(&client.PullRequest{
 		Want:     []githash.SHA1{headRef.ObjectID},
 		Progress: os.Stdout,
 	})
@@ -183,7 +183,7 @@ func ExampleFetchStream_singleRef() {
 
 // This example connects to a remote and requests only the objects for a
 // single commit.
-func ExampleFetchStream_singleCommit() {
+func ExamplePullStream_singleCommit() {
 	// Create a remote for the URL.
 	ctx := context.Background()
 	u, err := client.ParseURL("https://github.com/gg-scm/gg-git.git")
@@ -195,23 +195,23 @@ func ExampleFetchStream_singleCommit() {
 		// handle error
 	}
 
-	// Open a connection for fetching objects.
-	stream, err := remote.StartFetch(ctx)
+	// Open a connection for pulling objects.
+	stream, err := remote.StartPull(ctx)
 	if err != nil {
 		// handle error
 	}
 	defer stream.Close()
-	if !stream.Capabilities().Has(client.FetchCapShallow) {
+	if !stream.Capabilities().Has(client.PullCapShallow) {
 		fmt.Fprintln(os.Stderr, "Remote does not support shallow clones!")
 		return
 	}
 
-	// Start fetching from remote.
+	// Start pulling from remote.
 	want, err := githash.ParseSHA1("c8ede9119a7188f2564d3b7257fa526c9285c23f")
 	if err != nil {
 		// handle error
 	}
-	response, err := stream.Negotiate(&client.FetchRequest{
+	response, err := stream.Negotiate(&client.PullRequest{
 		Want:     []githash.SHA1{want},
 		Depth:    1,
 		Progress: os.Stderr,

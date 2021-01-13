@@ -36,9 +36,9 @@ import (
 
 // Remote represents a Git repository that can be pulled from or pushed to.
 type Remote struct {
-	urlstr           string
-	impl             impl
-	fetchExtraParams string
+	urlstr          string
+	impl            impl
+	pullExtraParams string
 }
 
 // Options holds optional arguments for creating a Remote.
@@ -74,8 +74,8 @@ func (opts *Options) httpUserAgent() string {
 func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 	urlstr := u.Redacted()
 	remote := &Remote{
-		urlstr:           urlstr,
-		fetchExtraParams: v2ExtraParams,
+		urlstr:          urlstr,
+		pullExtraParams: v2ExtraParams,
 	}
 	switch u.Scheme {
 	case "", "file":

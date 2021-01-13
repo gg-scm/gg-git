@@ -36,17 +36,17 @@ const (
 	fetchV2Command    = "fetch"
 )
 
-type fetchV2 struct {
+type pullV2 struct {
 	caps capabilityList
 	impl impl
 }
 
-func (f *fetchV2) Close() error {
+func (p *pullV2) Close() error {
 	return nil
 }
 
-func (f *fetchV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
-	if !f.caps.supports(listRefsV2Command) {
+func (p *pullV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
+	if !p.caps.supports(listRefsV2Command) {
 		return nil, fmt.Errorf("unsupported by server")
 	}
 
@@ -58,7 +58,7 @@ func (f *fetchV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, e
 		commandBuf = pktline.AppendString(commandBuf, "ref-prefix "+prefix+"\n")
 	}
 	commandBuf = pktline.AppendFlush(commandBuf)
-	resp, err := f.impl.uploadPack(ctx, v2ExtraParams, bytes.NewReader(commandBuf))
+	resp, err := p.impl.uploadPack(ctx, v2ExtraParams, bytes.NewReader(commandBuf))
 	if err != nil {
 		return nil, err
 	}
@@ -113,25 +113,25 @@ func isRefAttribute(b []byte, name string) (val []byte, ok bool) {
 	return b[len(name)+1:], true
 }
 
-func (f *fetchV2) capabilities() FetchCapabilities {
-	caps := FetchCapIncludeTag | FetchCapThinPack
-	for _, feature := range strings.Fields(f.caps[fetchV2Command]) {
+func (p *pullV2) capabilities() PullCapabilities {
+	caps := PullCapIncludeTag | PullCapThinPack
+	for _, feature := range strings.Fields(p.caps[fetchV2Command]) {
 		switch feature {
 		case shallowCap:
-			caps |= FetchCapShallow | FetchCapDepthRelative | FetchCapSince | FetchCapShallowExclude
+			caps |= PullCapShallow | PullCapDepthRelative | PullCapSince | PullCapShallowExclude
 		case filterCap:
-			caps |= FetchCapFilter
+			caps |= PullCapFilter
 		}
 	}
 	return caps
 }
 
-func (f *fetchV2) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (_ *FetchResponse, err error) {
-	if !f.caps.supports(fetchV2Command) {
+func (p *pullV2) negotiate(ctx context.Context, errPrefix string, req *PullRequest) (_ *PullResponse, err error) {
+	if !p.caps.supports(fetchV2Command) {
 		return nil, fmt.Errorf("unsupported by server")
 	}
 	commandBuf := formatFetchRequestV2(req)
-	resp, err := f.impl.uploadPack(ctx, v2ExtraParams, bytes.NewReader(commandBuf))
+	resp, err := p.impl.uploadPack(ctx, v2ExtraParams, bytes.NewReader(commandBuf))
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (f *fetchV2) negotiate(ctx context.Context, errPrefix string, req *FetchReq
 	return result, err
 }
 
-func formatFetchRequestV2(req *FetchRequest) []byte {
+func formatFetchRequestV2(req *PullRequest) []byte {
 	var buf []byte
 	buf = pktline.AppendString(buf, "command="+fetchV2Command+"\n")
 	buf = pktline.AppendDelim(buf)
@@ -195,13 +195,13 @@ func formatFetchRequestV2(req *FetchRequest) []byte {
 	return buf
 }
 
-func readFetchOutputV2(r *pktline.Reader, newPackfileReader func(*pktline.Reader) io.ReadCloser) (*FetchResponse, error) {
+func readFetchOutputV2(r *pktline.Reader, newPackfileReader func(*pktline.Reader) io.ReadCloser) (*PullResponse, error) {
 	r.Next()
 	section, err := r.Text()
 	if err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
-	result := new(FetchResponse)
+	result := new(PullResponse)
 
 	if bytes.Equal(section, []byte("acknowledgments")) {
 		var err error

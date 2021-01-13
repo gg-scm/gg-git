@@ -215,7 +215,7 @@ func readStatusReport(r *pktline.Reader) (*statusReport, error) {
 		return nil, fmt.Errorf("read status report: did not start with %q", unpackStatusPrefix)
 	}
 	report := &statusReport{
-		status:   string(trimLF(line[len(unpackStatusPrefix):])),
+		status:   string(line[len(unpackStatusPrefix):]),
 		commands: make(map[string]string),
 	}
 	if report.status == "" {

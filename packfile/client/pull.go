@@ -29,27 +29,27 @@ import (
 	"gg-scm.io/pkg/git/internal/pktline"
 )
 
-// FetchStream represents a git-upload-pack session.
-type FetchStream struct {
+// PullStream represents a git-upload-pack session.
+type PullStream struct {
 	ctx    context.Context
 	urlstr string
-	impl   fetcher
+	impl   puller
 }
 
-type fetcher interface {
-	negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error)
+type puller interface {
+	negotiate(ctx context.Context, errPrefix string, req *PullRequest) (*PullResponse, error)
 	listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error)
-	capabilities() FetchCapabilities
+	capabilities() PullCapabilities
 	Close() error
 }
 
-// StartFetch starts a git-upload-pack session on the remote.
-// The Context is used for the entire fetch stream. The caller is responsible
-// for calling Close on the returned FetchStream.
-func (r *Remote) StartFetch(ctx context.Context) (_ *FetchStream, err error) {
-	resp, err := r.impl.advertiseRefs(ctx, r.fetchExtraParams)
+// StartPull starts a git-upload-pack session on the remote.
+// The Context is used for the entire pull stream. The caller is responsible
+// for calling Close on the returned PullStream.
+func (r *Remote) StartPull(ctx context.Context) (_ *PullStream, err error) {
+	resp, err := r.impl.advertiseRefs(ctx, r.pullExtraParams)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
+		return nil, fmt.Errorf("pull %s: %w", r.urlstr, err)
 	}
 	// Not deferring resp.Close because V1 needs to retain resp.
 	respReader := pktline.NewReader(resp)
@@ -57,9 +57,9 @@ func (r *Remote) StartFetch(ctx context.Context) (_ *FetchStream, err error) {
 	line, err := respReader.Text()
 	if err != nil {
 		resp.Close()
-		return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
+		return nil, fmt.Errorf("pull %s: %w", r.urlstr, err)
 	}
-	f := &FetchStream{
+	p := &PullStream{
 		ctx:    ctx,
 		urlstr: r.urlstr,
 	}
@@ -67,16 +67,16 @@ func (r *Remote) StartFetch(ctx context.Context) (_ *FetchStream, err error) {
 		caps, err := parseCapabilityAdvertisementV2(respReader)
 		resp.Close()
 		if err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", r.urlstr, err)
+			return nil, fmt.Errorf("pull %s: %w", r.urlstr, err)
 		}
-		f.impl = &fetchV2{
+		p.impl = &pullV2{
 			caps: caps,
 			impl: r.impl,
 		}
 	} else {
-		f.impl = newFetchV1(r.impl, respReader, resp)
+		p.impl = newPullV1(r.impl, respReader, resp)
 	}
-	return f, nil
+	return p, nil
 }
 
 // Ref describes a single reference to a Git object.
@@ -91,21 +91,21 @@ type Ref struct {
 //
 // If you need to call both ListRefs and Negotiate on a stream, you should call
 // ListRefs first. Older Git servers send their refs upfront
-func (f *FetchStream) ListRefs(refPrefixes ...string) ([]*Ref, error) {
-	refs, err := f.impl.listRefs(f.ctx, refPrefixes)
+func (p *PullStream) ListRefs(refPrefixes ...string) ([]*Ref, error) {
+	refs, err := p.impl.listRefs(p.ctx, refPrefixes)
 	if err != nil {
-		return nil, fmt.Errorf("list refs for %s: %w", f.urlstr, err)
+		return nil, fmt.Errorf("list refs for %s: %w", p.urlstr, err)
 	}
 	return refs, nil
 }
 
-// Capabilities returns the set of fetch request fields the remote supports.
-func (f *FetchStream) Capabilities() FetchCapabilities {
-	return f.impl.capabilities()
+// Capabilities returns the set of pull request fields the remote supports.
+func (p *PullStream) Capabilities() PullCapabilities {
+	return p.impl.capabilities()
 }
 
-// A FetchRequest informs the remote which objects to include in the packfile.
-type FetchRequest struct {
+// A PullRequest informs the remote which objects to include in the packfile.
+type PullRequest struct {
 	// Want is the set of commits to send. At least one must be specified,
 	// or SendRequest will return an error.
 	Want []githash.SHA1
@@ -123,35 +123,35 @@ type FetchRequest struct {
 	Progress io.Writer
 
 	// Shallow is the set of object IDs that the client does not have the parent
-	// commits of. This is only supported by the remote if it has FetchCapShallow.
+	// commits of. This is only supported by the remote if it has PullCapShallow.
 	Shallow []githash.SHA1
 
-	// If Depth is greater than zero, it limits the depth of the commits fetched.
+	// If Depth is greater than zero, it limits the depth of the commits pulled.
 	// It is mutually exclusive with Since. This is only supported by the remote
-	// if it has FetchCapShallow.
+	// if it has PullCapShallow.
 	Depth int
 	// If DepthRelative is true, Depth is interpreted as relative to the client's
 	// shallow boundary. Otherwise, it is interpreted as relative to the commits
-	// in Want. This is only supported by the remote if it has FetchCapDepthRelative.
+	// in Want. This is only supported by the remote if it has PullCapDepthRelative.
 	DepthRelative bool
-	// Since requests that the shallow clone/fetch should be cut at a specific
+	// Since requests that the shallow clone/pull should be cut at a specific
 	// time. It is mutually exclusive with Depth.  This is only supported by the
-	// remote if it has FetchCapSince.
+	// remote if it has PullCapSince.
 	Since time.Time
 	// ShallowExclude is a set of revisions that the remote will exclude from
 	// the packfile. Unlike Have, the remote will send any needed trees and
 	// blobs even if they are shared with the revisions in ShallowExclude.
 	// It is mutually exclusive with Depth, but not Since. This is only supported
-	// by the remote if it has FetchCapShallowExclude.
+	// by the remote if it has PullCapShallowExclude.
 	ShallowExclude []string
 
 	// Filter filters objects in the packfile based on a filter-spec as defined
-	// in git-rev-list(1). This is only supported by the remote if it has FetchCapFilter.
+	// in git-rev-list(1). This is only supported by the remote if it has PullCapFilter.
 	Filter string
 
 	// IncludeTag indicates whether annotated tags should be sent if the objects
 	// they point to are being sent. This is only supported by the remote if it
-	// has FetchCapIncludeTag.
+	// has PullCapIncludeTag.
 	IncludeTag bool
 
 	// ThinPack requests that a thin pack be sent, which is a pack with deltas
@@ -159,20 +159,20 @@ type FetchRequest struct {
 	// to exist at the receiving end). This can reduce the network traffic
 	// significantly, but it requires the receiving end to know how to "thicken"
 	// these packs by adding the missing bases to the pack. This is only supported
-	// by the remote if it has FetchCapThinPack.
+	// by the remote if it has PullCapThinPack.
 	ThinPack bool
 }
 
-func (req *FetchRequest) needsShallow() bool {
+func (req *PullRequest) needsShallow() bool {
 	return len(req.Shallow) > 0 || req.Depth > 0
 }
 
-func (req *FetchRequest) needsDepthRelative() bool {
+func (req *PullRequest) needsDepthRelative() bool {
 	return req.DepthRelative && req.Depth > 0
 }
 
-// A FetchResponse holds the remote response to a round of negotiation.
-type FetchResponse struct {
+// A PullResponse holds the remote response to a round of negotiation.
+type PullResponse struct {
 	// Packfile is a packfile stream. It may be nil if the request set HaveMore
 	// and the remote didn't find a suitable base.
 	//
@@ -191,9 +191,9 @@ type FetchResponse struct {
 
 // Negotiate requests a packfile from the remote. It must be called before
 // calling the Read method.
-func (f *FetchStream) Negotiate(req *FetchRequest) (*FetchResponse, error) {
+func (p *PullStream) Negotiate(req *PullRequest) (*PullResponse, error) {
 	// Validate request is self-consistent.
-	errPrefix := "fetch " + f.urlstr
+	errPrefix := "pull " + p.urlstr
 	if len(req.Want) == 0 {
 		return nil, fmt.Errorf("%s: no objects requested", errPrefix)
 	}
@@ -205,31 +205,31 @@ func (f *FetchStream) Negotiate(req *FetchRequest) (*FetchResponse, error) {
 	}
 
 	// Validate that request uses capabilities that the remote supports.
-	caps := f.impl.capabilities()
-	if (req.needsShallow()) && !caps.Has(FetchCapShallow) {
+	caps := p.impl.capabilities()
+	if (req.needsShallow()) && !caps.Has(PullCapShallow) {
 		return nil, fmt.Errorf("%s: remote does not support shallow clones", errPrefix)
 	}
-	if req.needsDepthRelative() && !caps.Has(FetchCapDepthRelative) {
+	if req.needsDepthRelative() && !caps.Has(PullCapDepthRelative) {
 		return nil, fmt.Errorf("%s: remote does not support relative depths", errPrefix)
 	}
-	if req.Since.IsZero() && !caps.Has(FetchCapSince) {
+	if req.Since.IsZero() && !caps.Has(PullCapSince) {
 		return nil, fmt.Errorf("%s: remote does not support shallow-since", errPrefix)
 	}
-	if len(req.ShallowExclude) > 0 && !caps.Has(FetchCapShallowExclude) {
+	if len(req.ShallowExclude) > 0 && !caps.Has(PullCapShallowExclude) {
 		return nil, fmt.Errorf("%s: remote does not support shallow revision exclusions", errPrefix)
 	}
-	if req.Filter != "" && !caps.Has(FetchCapFilter) {
+	if req.Filter != "" && !caps.Has(PullCapFilter) {
 		return nil, fmt.Errorf("%s: remote does not support object filters", errPrefix)
 	}
-	if req.IncludeTag && !caps.Has(FetchCapIncludeTag) {
+	if req.IncludeTag && !caps.Has(PullCapIncludeTag) {
 		return nil, fmt.Errorf("%s: remote does not support include-tag", errPrefix)
 	}
-	if req.ThinPack && !caps.Has(FetchCapThinPack) {
+	if req.ThinPack && !caps.Has(PullCapThinPack) {
 		return nil, fmt.Errorf("%s: remote does not support thin packs", errPrefix)
 	}
 
 	// Call negotiate.
-	resp, err := f.impl.negotiate(f.ctx, errPrefix, req)
+	resp, err := p.impl.negotiate(p.ctx, errPrefix, req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -240,8 +240,8 @@ func (f *FetchStream) Negotiate(req *FetchRequest) (*FetchResponse, error) {
 }
 
 // Close releases any resources used by the stream.
-func (f *FetchStream) Close() error {
-	return f.impl.Close()
+func (p *PullStream) Close() error {
+	return p.impl.Close()
 }
 
 // packfileReader reads multiplexed packfile data.
@@ -255,52 +255,52 @@ type packfileReader struct {
 	progress  io.Writer
 }
 
-func (f *packfileReader) Read(p []byte) (int, error) {
-	if len(f.curr) > 0 {
-		n := copy(p, f.curr)
-		f.curr = f.curr[n:]
+func (pr *packfileReader) Read(p []byte) (int, error) {
+	if len(pr.curr) > 0 {
+		n := copy(p, pr.curr)
+		pr.curr = pr.curr[n:]
 		return n, nil
 	}
-	if f.packError != nil {
-		return 0, f.packError
+	if pr.packError != nil {
+		return 0, pr.packError
 	}
-	n, err := f.read(p)
+	n, err := pr.read(p)
 	if err != nil {
-		f.packError = err
+		pr.packError = err
 	}
 	return n, err
 }
 
-func (f *packfileReader) read(p []byte) (int, error) {
-	for f.packReader.Next() && f.packReader.Type() == pktline.Data {
-		pkt, err := f.packReader.Bytes()
+func (pr *packfileReader) read(p []byte) (int, error) {
+	for pr.packReader.Next() && pr.packReader.Type() == pktline.Data {
+		pkt, err := pr.packReader.Bytes()
 		if err != nil {
 			return 0, err
 		}
 		if len(pkt) == 0 {
-			return 0, fmt.Errorf("%s: empty packet", f.errPrefix)
+			return 0, fmt.Errorf("%s: empty packet", pr.errPrefix)
 		}
 		pktType, data := pkt[0], pkt[1:]
 		switch pktType {
 		case 1:
 			// Pack data
 			n := copy(p, data)
-			f.curr = data[n:]
+			pr.curr = data[n:]
 			return n, nil
 		case 2:
 			// Progress message
-			if f.progress != nil {
-				f.progress.Write(data)
+			if pr.progress != nil {
+				pr.progress.Write(data)
 			}
 		case 3:
 			// Fatal error message
-			return 0, fmt.Errorf("%s: server error: %s", f.errPrefix, trimLF(data))
+			return 0, fmt.Errorf("%s: server error: %s", pr.errPrefix, trimLF(data))
 		default:
-			return 0, fmt.Errorf("%s: encountered bad stream code (%02x)", f.errPrefix, pktType)
+			return 0, fmt.Errorf("%s: encountered bad stream code (%02x)", pr.errPrefix, pktType)
 		}
 	}
-	if err := f.packReader.Err(); err != nil {
-		return 0, fmt.Errorf("%s: %w", f.errPrefix, err)
+	if err := pr.packReader.Err(); err != nil {
+		return 0, fmt.Errorf("%s: %w", pr.errPrefix, err)
 	}
 	return 0, io.EOF
 }
@@ -312,37 +312,37 @@ func trimLF(line []byte) []byte {
 	return line[:len(line)-1]
 }
 
-func (f *packfileReader) Close() error {
-	return f.packCloser.Close()
+func (pr *packfileReader) Close() error {
+	return pr.packCloser.Close()
 }
 
-// FetchCapabilities is a bitset of capabilities that a remote supports for fetching.
-type FetchCapabilities uint64
+// PullCapabilities is a bitset of capabilities that a remote supports for pulling.
+type PullCapabilities uint64
 
-// Fetch capabilities.
+// Pull capabilities.
 // See https://git-scm.com/docs/protocol-capabilities for descriptions.
 const (
-	FetchCapShallow        FetchCapabilities = 1 << iota // shallow
-	FetchCapDepthRelative                                // deepen-relative
-	FetchCapSince                                        // deepen-since
-	FetchCapShallowExclude                               // deepen-not
-	FetchCapFilter                                       // filter
-	FetchCapIncludeTag                                   // include-tag
-	FetchCapThinPack                                     // thin-pack
+	PullCapShallow        PullCapabilities = 1 << iota // shallow
+	PullCapDepthRelative                               // deepen-relative
+	PullCapSince                                       // deepen-since
+	PullCapShallowExclude                              // deepen-not
+	PullCapFilter                                      // filter
+	PullCapIncludeTag                                  // include-tag
+	PullCapThinPack                                    // thin-pack
 
-	maxFetchCapBit
+	maxPullCapBit
 )
 
 // Has reports whether caps includes all of the capabilities in mask.
-func (caps FetchCapabilities) Has(mask FetchCapabilities) bool {
+func (caps PullCapabilities) Has(mask PullCapabilities) bool {
 	return caps&mask == mask
 }
 
 // String returns a |-separated list of the capability constant names present
 // in caps.
-func (caps FetchCapabilities) String() string {
+func (caps PullCapabilities) String() string {
 	sb := new(strings.Builder)
-	for bit := FetchCapabilities(1); bit < maxFetchCapBit; bit <<= 1 {
+	for bit := PullCapabilities(1); bit < maxPullCapBit; bit <<= 1 {
 		if !caps.Has(bit) {
 			continue
 		}
@@ -350,20 +350,20 @@ func (caps FetchCapabilities) String() string {
 			sb.WriteString("|")
 		}
 		switch bit {
-		case FetchCapShallow:
-			sb.WriteString("FetchCapShallow")
-		case FetchCapDepthRelative:
-			sb.WriteString("FetchCapDepthRelative")
-		case FetchCapSince:
-			sb.WriteString("FetchCapSince")
-		case FetchCapShallowExclude:
-			sb.WriteString("FetchCapShallowExclude")
-		case FetchCapFilter:
-			sb.WriteString("FetchCapFilter")
-		case FetchCapIncludeTag:
-			sb.WriteString("FetchCapIncludeTag")
-		case FetchCapThinPack:
-			sb.WriteString("FetchCapThinPack")
+		case PullCapShallow:
+			sb.WriteString("PullCapShallow")
+		case PullCapDepthRelative:
+			sb.WriteString("PullCapDepthRelative")
+		case PullCapSince:
+			sb.WriteString("PullCapSince")
+		case PullCapShallowExclude:
+			sb.WriteString("PullCapShallowExclude")
+		case PullCapFilter:
+			sb.WriteString("PullCapFilter")
+		case PullCapIncludeTag:
+			sb.WriteString("PullCapIncludeTag")
+		case PullCapThinPack:
+			sb.WriteString("PullCapThinPack")
 		}
 		caps &^= bit
 	}

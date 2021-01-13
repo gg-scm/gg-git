@@ -44,7 +44,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-func TestFetch(t *testing.T) {
+func TestPull(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	localGit, err := git.NewLocal(git.Options{
@@ -54,7 +54,7 @@ func TestFetch(t *testing.T) {
 		t.Skip("Can't find Git, skipping:", err)
 	}
 	g := git.Custom(dir, localGit, localGit)
-	objects, err := initFetchTestRepository(ctx, g, dir)
+	objects, err := initPullTestRepository(ctx, g, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,24 +64,24 @@ func TestFetch(t *testing.T) {
 			for version := 1; version <= 2; version++ {
 				t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
 					u := transport.getURL(t, dir)
-					runFetchTest(ctx, t, u, version, objects)
+					runPullTest(ctx, t, u, version, objects)
 				})
 			}
 		})
 	}
 }
 
-func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, objects *fetchTestObjects) {
+func runPullTest(ctx context.Context, t *testing.T, u *url.URL, version int, objects *pullTestObjects) {
 	remote, err := NewRemote(u, nil)
 	if err != nil {
 		t.Fatal("NewRemote:", err)
 	}
 	if version == 1 {
-		remote.fetchExtraParams = v1ExtraParams
+		remote.pullExtraParams = v1ExtraParams
 	}
-	stream, err := remote.StartFetch(ctx)
+	stream, err := remote.StartPull(ctx)
 	if err != nil {
-		t.Fatal("remote.StartFetch:", err)
+		t.Fatal("remote.StartPull:", err)
 	}
 	defer func() {
 		if err := stream.Close(); err != nil {
@@ -123,7 +123,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 	})
 
 	t.Run("Negotiate/All", func(t *testing.T) {
-		resp, err := stream.Negotiate(&FetchRequest{
+		resp, err := stream.Negotiate(&PullRequest{
 			Want: []githash.SHA1{objects.commit2.SHA1()},
 		})
 		if err != nil {
@@ -154,7 +154,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 	})
 
 	t.Run("Negotiate/First", func(t *testing.T) {
-		resp, err := stream.Negotiate(&FetchRequest{
+		resp, err := stream.Negotiate(&PullRequest{
 			Want: []githash.SHA1{objects.commit1.SHA1()},
 		})
 		if err != nil {
@@ -183,7 +183,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 	})
 
 	t.Run("Negotiate/Incremental", func(t *testing.T) {
-		resp, err := stream.Negotiate(&FetchRequest{
+		resp, err := stream.Negotiate(&PullRequest{
 			Want: []githash.SHA1{objects.commit2.SHA1()},
 			Have: []githash.SHA1{objects.commit1.SHA1()},
 		})
@@ -212,7 +212,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 	})
 
 	t.Run("Negotiate/ShallowSecond", func(t *testing.T) {
-		resp, err := stream.Negotiate(&FetchRequest{
+		resp, err := stream.Negotiate(&PullRequest{
 			Want:  []githash.SHA1{objects.commit2.SHA1()},
 			Depth: 1,
 		})
@@ -246,7 +246,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := stream.Negotiate(&FetchRequest{
+		resp, err := stream.Negotiate(&PullRequest{
 			Want:     []githash.SHA1{objects.commit2.SHA1()},
 			Have:     []githash.SHA1{randomHash},
 			HaveMore: true,
@@ -264,7 +264,7 @@ func runFetchTest(ctx context.Context, t *testing.T, u *url.URL, version int, ob
 	})
 }
 
-type fetchTestObjects struct {
+type pullTestObjects struct {
 	mainRef     githash.Ref
 	blobContent []byte
 	tree1       object.Tree
@@ -275,7 +275,7 @@ type fetchTestObjects struct {
 	ref2        githash.Ref
 }
 
-func initFetchTestRepository(ctx context.Context, g *git.Git, dir string) (*fetchTestObjects, error) {
+func initPullTestRepository(ctx context.Context, g *git.Git, dir string) (*pullTestObjects, error) {
 	g = g.WithDir(dir)
 	if err := g.Init(ctx, "."); err != nil {
 		return nil, err
@@ -336,7 +336,7 @@ func initFetchTestRepository(ctx context.Context, g *git.Git, dir string) (*fetc
 		return nil, err
 	}
 
-	objects := &fetchTestObjects{
+	objects := &pullTestObjects{
 		mainRef:     mainRef,
 		blobContent: []byte(fileContent),
 		ref1:        git.TagRef(tag1),
@@ -381,7 +381,7 @@ func initFetchTestRepository(ctx context.Context, g *git.Git, dir string) (*fetc
 	return objects, nil
 }
 
-func (objects *fetchTestObjects) blobObjectID() githash.SHA1 {
+func (objects *pullTestObjects) blobObjectID() githash.SHA1 {
 	id, err := object.BlobSum(bytes.NewReader(objects.blobContent), int64(len(objects.blobContent)))
 	if err != nil {
 		panic(err)
@@ -389,7 +389,7 @@ func (objects *fetchTestObjects) blobObjectID() githash.SHA1 {
 	return id
 }
 
-func TestFetchGitHubRepository(t *testing.T) {
+func TestPullGitHubRepository(t *testing.T) {
 	t.Skip("Not hermetic. Test intended for manual development.")
 	r, err := NewRemote(&url.URL{
 		Scheme: "https",
@@ -400,7 +400,7 @@ func TestFetchGitHubRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	stream, err := r.StartFetch(ctx)
+	stream, err := r.StartPull(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

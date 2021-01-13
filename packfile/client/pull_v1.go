@@ -50,7 +50,7 @@ const (
 	thinPackCap       = "thin-pack"
 )
 
-type fetchV1 struct {
+type pullV1 struct {
 	caps       capabilityList
 	impl       impl
 	refsReader *pktline.Reader
@@ -60,49 +60,49 @@ type fetchV1 struct {
 	refsError error
 }
 
-func newFetchV1(impl impl, refsReader *pktline.Reader, refsCloser io.Closer) *fetchV1 {
-	f := &fetchV1{impl: impl}
+func newPullV1(impl impl, refsReader *pktline.Reader, refsCloser io.Closer) *pullV1 {
+	p := &pullV1{impl: impl}
 	var ref0 *Ref
-	ref0, f.caps, f.refsError = readFirstRefV1(refsReader)
+	ref0, p.caps, p.refsError = readFirstRefV1(refsReader)
 	if ref0 == nil {
 		// Either an error or only capabilities were received.
 		// No need to hang onto refsReader.
 		refsCloser.Close()
-		return f
+		return p
 	}
-	f.refs = []*Ref{ref0}
-	f.refsReader = refsReader
-	f.refsCloser = refsCloser
-	return f
+	p.refs = []*Ref{ref0}
+	p.refsReader = refsReader
+	p.refsCloser = refsCloser
+	return p
 }
 
-func (f *fetchV1) Close() error {
-	if f.refsCloser != nil {
-		return f.refsCloser.Close()
+func (p *pullV1) Close() error {
+	if p.refsCloser != nil {
+		return p.refsCloser.Close()
 	}
 	return nil
 }
 
-func (f *fetchV1) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
-	if f.refsReader != nil {
-		f.refs, f.refsError = readOtherRefsV1(f.refs, f.caps.symrefs(), f.refsReader)
-		f.refsCloser.Close()
-		f.refsReader = nil
-		f.refsCloser = nil
+func (p *pullV1) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
+	if p.refsReader != nil {
+		p.refs, p.refsError = readOtherRefsV1(p.refs, p.caps.symrefs(), p.refsReader)
+		p.refsCloser.Close()
+		p.refsReader = nil
+		p.refsCloser = nil
 	}
 	if len(refPrefixes) == 0 {
-		return append([]*Ref(nil), f.refs...), f.refsError
+		return append([]*Ref(nil), p.refs...), p.refsError
 	}
 	// Filter by given prefixes.
-	refs := make([]*Ref, 0, len(f.refs))
-	for _, r := range f.refs {
+	refs := make([]*Ref, 0, len(p.refs))
+	for _, r := range p.refs {
 		for _, prefix := range refPrefixes {
 			if strings.HasPrefix(string(r.Name), prefix) {
 				refs = append(refs, r)
 			}
 		}
 	}
-	return refs, f.refsError
+	return refs, p.refsError
 }
 
 // readFirstRefV1 reads the first ref in the version 1 refs advertisement
@@ -204,7 +204,6 @@ func readOtherRefsV1(refs []*Ref, symrefs map[githash.Ref]githash.Ref, r *pktlin
 }
 
 func parseOtherRefV1(line []byte) (*Ref, error) {
-	line = trimLF(line)
 	idEnd := bytes.IndexByte(line, ' ')
 	if idEnd == -1 {
 		return nil, fmt.Errorf("ref: missing space")
@@ -223,39 +222,39 @@ func parseOtherRefV1(line []byte) (*Ref, error) {
 	}, nil
 }
 
-func (f *fetchV1) capabilities() FetchCapabilities {
-	caps := FetchCapabilities(0)
-	if f.caps.supports(shallowCap) {
-		caps |= FetchCapShallow
+func (p *pullV1) capabilities() PullCapabilities {
+	caps := PullCapabilities(0)
+	if p.caps.supports(shallowCap) {
+		caps |= PullCapShallow
 	}
-	if f.caps.supports(deepenRelativeCap) {
-		caps |= FetchCapDepthRelative
+	if p.caps.supports(deepenRelativeCap) {
+		caps |= PullCapDepthRelative
 	}
-	if f.caps.supports(deepenSinceCap) {
-		caps |= FetchCapSince
+	if p.caps.supports(deepenSinceCap) {
+		caps |= PullCapSince
 	}
-	if f.caps.supports(deepenNotCap) {
-		caps |= FetchCapShallowExclude
+	if p.caps.supports(deepenNotCap) {
+		caps |= PullCapShallowExclude
 	}
-	if f.caps.supports(filterCap) {
-		caps |= FetchCapFilter
+	if p.caps.supports(filterCap) {
+		caps |= PullCapFilter
 	}
-	if f.caps.supports(includeTagCap) {
-		caps |= FetchCapIncludeTag
+	if p.caps.supports(includeTagCap) {
+		caps |= PullCapIncludeTag
 	}
-	if f.caps.supports(thinPackCap) {
-		caps |= FetchCapThinPack
+	if p.caps.supports(thinPackCap) {
+		caps |= PullCapThinPack
 	}
 	return caps
 }
 
-func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchRequest) (*FetchResponse, error) {
-	useCaps, err := capabilitiesToSendV1(req, f.caps)
+func (p *pullV1) negotiate(ctx context.Context, errPrefix string, req *PullRequest) (*PullResponse, error) {
+	useCaps, err := capabilitiesToSendV1(req, p.caps)
 	if err != nil {
 		return nil, err
 	}
 	commandBuf := formatUploadRequestV1(req, useCaps)
-	resp, err := f.impl.uploadPack(ctx, v1ExtraParams, bytes.NewReader(commandBuf))
+	resp, err := p.impl.uploadPack(ctx, v1ExtraParams, bytes.NewReader(commandBuf))
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +265,7 @@ func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchReq
 	}()
 
 	respReader := pktline.NewReader(resp)
-	result := &FetchResponse{
+	result := &PullResponse{
 		Acks: make(map[githash.SHA1]struct{}),
 	}
 	if req.Depth > 0 || !req.Since.IsZero() || len(req.ShallowExclude) > 0 {
@@ -295,7 +294,7 @@ func (f *fetchV1) negotiate(ctx context.Context, errPrefix string, req *FetchReq
 	return result, nil
 }
 
-func capabilitiesToSendV1(req *FetchRequest, remoteCaps capabilityList) (capabilityList, error) {
+func capabilitiesToSendV1(req *PullRequest, remoteCaps capabilityList) (capabilityList, error) {
 	useCaps := capabilityList{
 		multiAckCap: "",
 		ofsDeltaCap: "",
@@ -339,7 +338,7 @@ func capabilitiesToSendV1(req *FetchRequest, remoteCaps capabilityList) (capabil
 	return useCaps, nil
 }
 
-func formatUploadRequestV1(req *FetchRequest, useCaps capabilityList) []byte {
+func formatUploadRequestV1(req *PullRequest, useCaps capabilityList) []byte {
 	var buf []byte
 	buf = pktline.AppendString(buf, fmt.Sprintf("want %v %v\n", req.Want[0], useCaps))
 	for _, want := range req.Want[1:] {
