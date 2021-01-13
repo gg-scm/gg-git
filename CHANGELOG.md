@@ -5,6 +5,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.8.1...main
 
+## [Unreleased][]
+
+### Added
+
+-  A new `packfile/client` package enables downloading commits from and
+   uploading commits to remote Git repositories.
+   ([#7](https://github.com/gg-scm/gg-git/issues/7))
+-  The `githash` package is now the home for the `Ref` type. This permits
+   ref string manipulation without depending on the larger `git` package.
+   `git.Ref` is now a type alias for `githash.Ref`.
+
 ## [0.8.1][] - 2021-01-02
 
 Version 0.8.1 updates the README.
