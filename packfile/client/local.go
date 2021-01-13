@@ -78,13 +78,16 @@ func (r *uploadPackReader) WriteTo(w io.Writer) (int64, error) {
 
 func (r *uploadPackReader) Close() error {
 	r.pipe.Close()
-	if err := r.wait(); err != nil {
-		if exit := (*exec.ExitError)(nil); errors.As(err, &exit) && !exit.Exited() {
-			// Signaled.
-			return nil
-		}
-		return fmt.Errorf("%s: %w", r.errPrefix, err)
-	}
+	r.wait()
+	// We always return nil from Close because the errors from wait() are usually
+	// exits due to SIGPIPE or SIGTERM if we stop reading early. While we could
+	// filter out signals on most systems, Git for Windows exits with a non-zero
+	// code that we don't want to depend on.
+	//
+	// The broader observation is that the more interesting errors come from the
+	// high-level interactions, not from the exit code. git-upload-pack is a
+	// read-only mechanism, so the Close is mostly about cleaning up resources,
+	// not determining whether the operation succeeded.
 	return nil
 }
 
