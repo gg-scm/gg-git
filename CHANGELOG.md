@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  The `githash` package is now the home for the `Ref` type. This permits
    ref string manipulation without depending on the larger `git` package.
    `git.Ref` is now a type alias for `githash.Ref`.
+-  `*object.Commit` and `*object.Tag` now implement `BinaryMarshaler` and
+   `BinaryUnmarshaler` in addition to `TextMarshaler` and `TextUnmarshaler`.
+   This is for symmetry with `object.Tree`.
 
 ## [0.8.1][] - 2021-01-02
 
