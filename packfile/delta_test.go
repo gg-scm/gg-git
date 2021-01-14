@@ -18,11 +18,12 @@ package packfile
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
 
-func TestApplyDelta(t *testing.T) {
+func TestDeltaReader(t *testing.T) {
 	tests := []struct {
 		name  string
 		base  string
@@ -79,8 +80,9 @@ func TestApplyDelta(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := new(bytes.Buffer)
-			if err := ApplyDelta(got, strings.NewReader(test.base), bytes.NewReader(test.delta)); err != nil {
-				t.Errorf("ApplyDelta(...) = %v", err)
+			d := NewDeltaReader(strings.NewReader(test.base), bytes.NewReader(test.delta))
+			if n, err := io.Copy(got, d); err != nil {
+				t.Errorf("io.Copy(...) = %d, %v; want %d, <nil>", n, err, len(test.want))
 			}
 			if got.String() != test.want {
 				t.Errorf("got %q; want %q", got, test.want)

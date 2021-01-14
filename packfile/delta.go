@@ -24,63 +24,106 @@ import (
 	"io/ioutil"
 )
 
-// ApplyDelta applies delta instructions to another object to form the full object.
-func ApplyDelta(dst io.Writer, base io.ReaderAt, delta ByteReader) error {
-	if _, err := binary.ReadUvarint(delta); err != nil {
-		return fmt.Errorf("apply delta: %w", err)
-	}
-	if _, err := binary.ReadUvarint(delta); err != nil {
-		return fmt.Errorf("apply delta: %w", err)
-	}
-	for {
-		instruction, err := delta.ReadByte()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("apply delta: %w", err)
-		}
-		switch {
-		case instruction&0x80 != 0:
-			// Copy from base
-			offset, size, err := readCopyBaseInstruction(instruction, delta)
-			if err != nil {
-				return fmt.Errorf("apply delta: %w", err)
-			}
-			err = copyN(dst, io.NewSectionReader(base, int64(offset), int64(size)), int64(size))
-			if err != nil {
-				return fmt.Errorf("apply delta: %w", err)
-			}
-		case instruction != 0:
-			// Add new data
-			if err := copyN(dst, delta, int64(instruction)); err != nil {
-				return fmt.Errorf("apply delta (n=%d): %w", instruction, err)
-			}
-		default:
-			return fmt.Errorf("apply delta: unknown instruction")
-		}
+// DeltaReader decompresses a deltified object from a packfile.
+// See details at https://git-scm.com/docs/pack-format#_deltified_representation
+type DeltaReader struct {
+	base  io.ReaderAt
+	delta ByteReader
+
+	inited    bool
+	curr      io.Reader
+	remaining uint32
+}
+
+// NewDeltaReader returns a new DeltaReader that applies the given delta to a
+// base object.
+func NewDeltaReader(base io.ReaderAt, delta ByteReader) *DeltaReader {
+	return &DeltaReader{
+		base:  base,
+		delta: delta,
 	}
 }
 
-func copyN(dst io.Writer, src io.Reader, n int64) error {
-	written, err := io.Copy(dst, io.LimitReader(src, n))
-	if written == n {
+func (d *DeltaReader) init() error {
+	if d.inited {
 		return nil
 	}
-	if written < n && err == nil {
-		// src stopped early; must have been EOF.
+	if _, _, err := readDeltaHeader(d.delta); err != nil {
+		return fmt.Errorf("apply delta: %w", err)
+	}
+	d.inited = true
+	return nil
+}
+
+func readDeltaHeader(r io.ByteReader) (baseObjectSize, expandedSize uint64, err error) {
+	baseObjectSize, err = binary.ReadUvarint(r)
+	if err != nil {
+		return
+	}
+	expandedSize, err = binary.ReadUvarint(r)
+	if err != nil {
+		return
+	}
+	return
+}
+
+// Read implements io.Reader by decompressing the deltified object.
+func (d *DeltaReader) Read(p []byte) (int, error) {
+	if d.curr == nil {
+		if err := d.init(); err != nil {
+			return 0, err
+		}
+		if err := d.readInstruction(); err != nil {
+			return 0, err
+		}
+	}
+	// Now we know where we're reading from. Read until we get to end of length.
+	if int64(len(p)) > int64(d.remaining) {
+		p = p[:int(d.remaining)]
+	}
+	n, err := d.curr.Read(p)
+	d.remaining -= uint32(n)
+	if d.remaining == 0 {
+		err = nil
+		d.curr = nil
+	}
+	if err == io.EOF {
 		err = io.ErrUnexpectedEOF
 	}
-	return err
+	return n, err
+}
+
+func (d *DeltaReader) readInstruction() error {
+	instruction, err := d.delta.ReadByte()
+	if err == io.EOF {
+		return io.EOF
+	}
+	if err != nil {
+		return fmt.Errorf("apply delta: %w", err)
+	}
+	switch {
+	case instruction&0x80 != 0:
+		// Copy from base
+		offset, size, err := readCopyBaseInstruction(instruction, d.delta)
+		if err != nil {
+			return fmt.Errorf("apply delta: %w", err)
+		}
+		d.curr = io.NewSectionReader(d.base, int64(offset), int64(size))
+		d.remaining = size
+	case instruction != 0:
+		// Add new data
+		d.curr = d.delta
+		d.remaining = uint32(instruction)
+	default:
+		return fmt.Errorf("apply delta: unknown instruction")
+	}
+	return nil
 }
 
 // DeltaObjectSize calculates the size of an object constructed from delta
 // instructions.
 func DeltaObjectSize(delta ByteReader) (int64, error) {
-	if _, err := binary.ReadUvarint(delta); err != nil {
-		return 0, fmt.Errorf("calculate delta object size: %w", err)
-	}
-	if _, err := binary.ReadUvarint(delta); err != nil {
+	if _, _, err := readDeltaHeader(delta); err != nil {
 		return 0, fmt.Errorf("calculate delta object size: %w", err)
 	}
 	var n int64
@@ -145,4 +188,18 @@ func readCopyBaseInstruction(instruction byte, r io.ByteReader) (offset, size ui
 		size = 0x10000
 	}
 	return
+}
+
+// copyN is a copy of io.CopyN but returns ErrUnexpectedEOF if less than n bytes
+// where copied.
+func copyN(dst io.Writer, src io.Reader, n int64) error {
+	written, err := io.Copy(dst, io.LimitReader(src, n))
+	if written == n {
+		return nil
+	}
+	if written < n && err == nil {
+		// src stopped early; must have been EOF.
+		err = io.ErrUnexpectedEOF
+	}
+	return err
 }

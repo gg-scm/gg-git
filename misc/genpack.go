@@ -242,7 +242,8 @@ func objectOffset() (err error) {
 
 func validateDelta(want, base string, delta []byte) error {
 	buf := new(bytes.Buffer)
-	if err := packfile.ApplyDelta(buf, strings.NewReader(base), bytes.NewReader(delta)); err != nil {
+	d := packfile.NewDeltaReader(strings.NewReader(base), bytes.NewReader(delta))
+	if _, err := io.Copy(buf, d); err != nil {
 		return fmt.Errorf("validate delta: %w", err)
 	}
 	if !bytes.Equal(buf.Bytes(), []byte(want)) {

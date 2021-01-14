@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  `*object.Commit` and `*object.Tag` now implement `BinaryMarshaler` and
    `BinaryUnmarshaler` in addition to `TextMarshaler` and `TextUnmarshaler`.
    This is for symmetry with `object.Tree`.
+-  The `packfile.DeltaReader` type is a flexible way of expanding a deltified
+   object from a packfile.
+
+### Removed
+
+-  Removed the `packfile.ApplyDelta` function. The `packfile.DeltaReader` type
+   performs the same function but permits more control over how it's used.
 
 ## [0.8.1][] - 2021-01-02
 
