@@ -33,7 +33,9 @@ type ByteReader interface {
 	io.ByteReader
 }
 
-// Reader reads a packfile.
+// Reader reads a packfile serially.
+//
+// Use ReadHeader if you want random access in a packfile.
 type Reader struct {
 	r     byteReaderCounter
 	nobjs uint32
@@ -51,21 +53,29 @@ func (r *Reader) init() error {
 	if r.r.n > 0 {
 		return nil
 	}
-	var buf [12]byte
-	if _, err := io.ReadFull(&r.r, buf[:]); errors.Is(err, io.EOF) {
-		return fmt.Errorf("packfile: read header: %w", io.ErrUnexpectedEOF)
+	var err error
+	r.nobjs, err = readFileHeader(&r.r)
+	return err
+}
+
+const fileHeaderSize = 12
+
+func readFileHeader(r io.Reader) (uint32, error) {
+	var buf [fileHeaderSize]byte
+	if _, err := io.ReadFull(r, buf[:]); errors.Is(err, io.EOF) {
+		return 0, fmt.Errorf("packfile: read header: %w", io.ErrUnexpectedEOF)
 	} else if err != nil {
-		return fmt.Errorf("packfile: read header: %w", err)
+		return 0, fmt.Errorf("packfile: read header: %w", err)
 	}
 	if buf[0] != 'P' || buf[1] != 'A' || buf[2] != 'C' || buf[3] != 'K' {
-		return errors.New("packfile: read header: incorrect signature")
+		return 0, errors.New("packfile: read header: incorrect signature")
 	}
 	version := uint32(buf[4])<<24 | uint32(buf[5])<<16 | uint32(buf[6])<<8 | uint32(buf[7])
 	if version != 2 {
-		return fmt.Errorf("packfile: read header: version is %d (only supports 2)", version)
+		return 0, fmt.Errorf("packfile: read header: version is %d (only supports 2)", version)
 	}
-	r.nobjs = uint32(buf[8])<<24 | uint32(buf[9])<<16 | uint32(buf[10])<<8 | uint32(buf[11])
-	return nil
+	nobjs := uint32(buf[8])<<24 | uint32(buf[9])<<16 | uint32(buf[10])<<8 | uint32(buf[11])
+	return nobjs, nil
 }
 
 // Next advances to the next object in the packfile. The Header.Size determines
@@ -98,23 +108,9 @@ func (r *Reader) Next() (*Header, error) {
 		}
 		return nil, io.EOF
 	}
-	hdr := &Header{Offset: r.r.n}
-	var err error
-	hdr.Type, hdr.Size, err = readLengthType(&r.r)
+	hdr, err := ReadHeader(r.r.n, &r.r)
 	if err != nil {
-		return nil, fmt.Errorf("packfile: %w", err)
-	}
-	switch hdr.Type {
-	case OffsetDelta:
-		off, err := readOffset(&r.r)
-		if err != nil {
-			return nil, fmt.Errorf("packfile: %w", err)
-		}
-		hdr.BaseOffset = hdr.Offset + off
-	case RefDelta:
-		if _, err := io.ReadFull(&r.r, hdr.BaseObject[:]); err != nil {
-			return nil, fmt.Errorf("packfile: read ref-delta object: %w", err)
-		}
+		return nil, err
 	}
 	if r.dataReader == nil {
 		dr, err := zlib.NewReader(&r.r)
@@ -161,6 +157,49 @@ var (
 	errTooLong  = errors.New("packfile: object longer than header size")
 	errTooShort = errors.New("packfile: object shorter than header size")
 )
+
+// A Header holds a single object header in a packfile.
+type Header struct {
+	// Offset is the location in the packfile this object starts at. It can be
+	// used as a key for BaseOffset. Writer ignores this field.
+	Offset int64
+
+	Type ObjectType
+
+	// Size is the uncompressed size of the object in bytes.
+	Size int64
+
+	// BaseOffset is the Offset of a previous Header for an OffsetDelta type object.
+	BaseOffset int64
+	// BaseObject is the hash of an object for a RefDelta type object.
+	BaseObject githash.SHA1
+}
+
+// ReadHeader reads a packfile object header from r. The returned Header's
+// Offset field will be set to the given offset. If ReadHeader does not return
+// an error, the data of the object will be available on r as a zlib-compressed
+// stream.
+func ReadHeader(offset int64, r ByteReader) (*Header, error) {
+	hdr := &Header{Offset: offset}
+	var err error
+	hdr.Type, hdr.Size, err = readLengthType(r)
+	if err != nil {
+		return nil, fmt.Errorf("packfile: %w", err)
+	}
+	switch hdr.Type {
+	case OffsetDelta:
+		off, err := readOffset(r)
+		if err != nil {
+			return nil, fmt.Errorf("packfile: %w", err)
+		}
+		hdr.BaseOffset = hdr.Offset + off
+	case RefDelta:
+		if _, err := io.ReadFull(r, hdr.BaseObject[:]); err != nil {
+			return nil, fmt.Errorf("packfile: read ref-delta object: %w", err)
+		}
+	}
+	return hdr, nil
+}
 
 func readLengthType(br io.ByteReader) (ObjectType, int64, error) {
 	first, err := br.ReadByte()
@@ -209,23 +248,6 @@ func readOffset(br io.ByteReader) (int64, error) {
 		accum += 1 << ((i + 1) * 7)
 	}
 	return 0, fmt.Errorf("read offset: too large")
-}
-
-// A Header holds a single object header in a packfile.
-type Header struct {
-	// Offset is the location in the packfile this object starts at. It can be
-	// used as a key for BaseOffset. Writer ignores this field.
-	Offset int64
-
-	Type ObjectType
-
-	// Size is the uncompressed size of the object in bytes.
-	Size int64
-
-	// BaseOffset is the Offset of a previous Header for an OffsetDelta type object.
-	BaseOffset int64
-	// BaseObject is the hash of an object for a RefDelta type object.
-	BaseObject githash.SHA1
 }
 
 // An ObjectType holds the type of an object inside a packfile.

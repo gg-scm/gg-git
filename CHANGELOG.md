@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This is for symmetry with `object.Tree`.
 -  The `packfile.DeltaReader` type is a flexible way of expanding a deltified
    object from a packfile.
+-  `packfile.ReadHeader` enables random access to a packfile.
 
 ### Removed
 
