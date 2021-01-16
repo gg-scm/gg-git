@@ -33,13 +33,13 @@ import (
 
 func main() {
 	funcMap := map[string]func() error{
-		"Empty":        empty,
-		"FirstCommit":  firstCommit,
-		"DeltaOffset":  deltaOffset,
-		"ObjectOffset": objectOffset,
-		"EmptyBlob":    emptyBlob,
-		"TooLong":      tooLong,
-		"TooShort":     tooShort,
+		"Empty":       empty,
+		"FirstCommit": firstCommit,
+		"DeltaOffset": deltaOffset,
+		"DeltaObject": deltaObject,
+		"EmptyBlob":   emptyBlob,
+		"TooLong":     tooLong,
+		"TooShort":    tooShort,
 	}
 	var names []string
 	for k := range funcMap {
@@ -187,7 +187,7 @@ func deltaOffset() (err error) {
 	return nil
 }
 
-func objectOffset() (err error) {
+func deltaObject() (err error) {
 	w := packfile.NewWriter(os.Stdout, 2)
 	defer func() {
 		if closeErr := w.Close(); err == nil && closeErr != nil {

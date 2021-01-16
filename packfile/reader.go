@@ -112,16 +112,8 @@ func (r *Reader) Next() (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.dataReader == nil {
-		dr, err := zlib.NewReader(&r.r)
-		if err != nil {
-			return nil, fmt.Errorf("packfile: %w", err)
-		}
-		r.dataReader = dr.(zlibReader)
-	} else {
-		if err := r.dataReader.Reset(&r.r, nil); err != nil {
-			return nil, fmt.Errorf("packfile: %w", err)
-		}
+	if err := setZlibReader(&r.dataReader, &r.r); err != nil {
+		return nil, fmt.Errorf("packfile: %w", err)
 	}
 	r.remaining = hdr.Size
 	r.nobjs--
@@ -317,4 +309,16 @@ type zlibReader interface {
 	io.Reader
 	io.Closer
 	zlib.Resetter
+}
+
+func setZlibReader(z *zlibReader, r ByteReader) error {
+	if *z == nil {
+		zr, err := zlib.NewReader(r)
+		if err != nil {
+			return err
+		}
+		*z = zr.(zlibReader)
+		return nil
+	}
+	return (*z).Reset(r, nil)
 }

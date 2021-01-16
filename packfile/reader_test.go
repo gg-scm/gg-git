@@ -38,10 +38,14 @@ type unpackedObject struct {
 var testFiles = []struct {
 	name      string
 	want      []unpackedObject
+	wantIndex *Index
 	wantError bool
 }{
 	{
 		name: "Empty",
+		wantIndex: &Index{
+			PackfileSHA1: hashLiteral("029d08823bd8a8eab510ad6ac75c823cfd3ed31e"),
+		},
 	},
 	{
 		name: "FirstCommit",
@@ -77,6 +81,20 @@ var testFiles = []struct {
 					"First commit\n"),
 			},
 		},
+		wantIndex: &Index{
+			Offsets: []int64{12, 91, 39},
+			ObjectIDs: []githash.SHA1{
+				hashLiteral("8ab686eafeb1f44702738c8b0f24f2567c36da6d"),
+				hashLiteral("aef8a4c3fe8d296dec2d9b88d4654cd596927867"),
+				hashLiteral("bc225ea23f53f06c0c5bd3ba2be85c2120d68417"),
+			},
+			PackedChecksums: []uint32{
+				0xd6402b58,
+				0x8f92a93a,
+				0x7fa848c1,
+			},
+			PackfileSHA1: hashLiteral("6d08a5bf64e27c0ef29448d8e50d56369b17198f"),
+		},
 	},
 	{
 		name: "DeltaOffset",
@@ -99,9 +117,21 @@ var testFiles = []struct {
 				Data: helloDelta,
 			},
 		},
+		wantIndex: &Index{
+			Offsets: []int64{12, 31},
+			ObjectIDs: []githash.SHA1{
+				hashLiteral("05a682bd4e7c7117c5856be7142fea67465415e3"),
+				hashLiteral("45c3b785642598057cf65b79fd05586dae5cba10"),
+			},
+			PackedChecksums: []uint32{
+				0x1d0344fe,
+				0x82c20b92,
+			},
+			PackfileSHA1: hashLiteral("fe67ec299ad01178f132db12d7bf93fe9897a646"),
+		},
 	},
 	{
-		name: "ObjectOffset",
+		name: "DeltaObject",
 		want: []unpackedObject{
 			{
 				Header: &Header{
@@ -113,16 +143,25 @@ var testFiles = []struct {
 			},
 			{
 				Header: &Header{
-					Offset: 31,
-					Type:   RefDelta,
-					Size:   13,
-					BaseObject: githash.SHA1{
-						0x05, 0xa6, 0x82, 0xbd, 0x4e, 0x7c, 0x71, 0x17, 0xc5, 0x85,
-						0x6b, 0xe7, 0x14, 0x2f, 0xea, 0x67, 0x46, 0x54, 0x15, 0xe3,
-					},
+					Offset:     31,
+					Type:       RefDelta,
+					Size:       13,
+					BaseObject: hashLiteral("05a682bd4e7c7117c5856be7142fea67465415e3"),
 				},
 				Data: helloDelta,
 			},
+		},
+		wantIndex: &Index{
+			Offsets: []int64{12, 31},
+			ObjectIDs: []githash.SHA1{
+				hashLiteral("05a682bd4e7c7117c5856be7142fea67465415e3"),
+				hashLiteral("45c3b785642598057cf65b79fd05586dae5cba10"),
+			},
+			PackedChecksums: []uint32{
+				0x1d0344fe,
+				0xf9c7e1ee,
+			},
+			PackfileSHA1: hashLiteral("5ca6b70287d79e571d8a86b6652cc351028f0658"),
 		},
 	},
 	{
@@ -144,6 +183,18 @@ var testFiles = []struct {
 				},
 				Data: []byte("Hello, World!\n"),
 			},
+		},
+		wantIndex: &Index{
+			Offsets: []int64{24, 12},
+			ObjectIDs: []githash.SHA1{
+				hashLiteral("8ab686eafeb1f44702738c8b0f24f2567c36da6d"),
+				hashLiteral("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
+			},
+			PackedChecksums: []uint32{
+				0xd6402b58,
+				0xbe56632f,
+			},
+			PackfileSHA1: hashLiteral("1fb6c9a5c90236ff883be04f3c5796435b9a6569"),
 		},
 	},
 	{
@@ -252,4 +303,12 @@ func TestReadOffset(t *testing.T) {
 			t.Errorf("readOffset(bytes.NewReader(%#v)) = %d, %v; want %d, <nil>", test.data, got, err, test.offset)
 		}
 	}
+}
+
+func hashLiteral(s string) githash.SHA1 {
+	var h githash.SHA1
+	if err := h.UnmarshalText([]byte(s)); err != nil {
+		panic(err)
+	}
+	return h
 }

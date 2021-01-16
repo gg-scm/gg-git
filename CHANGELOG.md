@@ -12,15 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  A new `packfile/client` package enables downloading commits from and
    uploading commits to remote Git repositories.
    ([#7](https://github.com/gg-scm/gg-git/issues/7))
--  The `githash` package is now the home for the `Ref` type. This permits
-   ref string manipulation without depending on the larger `git` package.
-   `git.Ref` is now a type alias for `githash.Ref`.
 -  `*object.Commit` and `*object.Tag` now implement `BinaryMarshaler` and
    `BinaryUnmarshaler` in addition to `TextMarshaler` and `TextUnmarshaler`.
    This is for symmetry with `object.Tree`.
 -  The `packfile.DeltaReader` type is a flexible way of expanding a deltified
    object from a packfile.
+-  The `packfile.Index` type stores a packfile object ID lookup table that is
+   interoperable with Git packfile index files.
+   ([#12](https://github.com/gg-scm/gg-git/issues/12))
 -  `packfile.ReadHeader` enables random access to a packfile.
+
+### Changed
+
+-  The `githash` package is now the home for the `Ref` type. This permits
+   ref string manipulation without depending on the larger `git` package.
+   `git.Ref` is now a type alias for `githash.Ref`.
 
 ### Removed
 
