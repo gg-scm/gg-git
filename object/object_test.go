@@ -17,10 +17,16 @@
 package object
 
 import (
+	"encoding"
 	"strings"
 	"testing"
 
 	"gg-scm.io/pkg/git/githash"
+)
+
+var (
+	_ encoding.BinaryMarshaler   = Prefix{}
+	_ encoding.BinaryUnmarshaler = new(Prefix)
 )
 
 func TestBlobSum(t *testing.T) {
@@ -54,6 +60,56 @@ func TestBlobSum(t *testing.T) {
 		}
 		t.Log("Error:", err)
 	})
+}
+
+func TestPrefixUnmarshalBinary(t *testing.T) {
+	tests := []struct {
+		data      string
+		want      Prefix
+		wantError bool
+	}{
+		{
+			data: "blob 0\x00",
+			want: Prefix{Type: TypeBlob, Size: 0},
+		},
+		{
+			data: "tree 42\x00",
+			want: Prefix{Type: TypeTree, Size: 42},
+		},
+		{
+			data:      "tree abc\x00",
+			wantError: true,
+		},
+		{
+			data:      "tree -42\x00",
+			wantError: true,
+		},
+		{
+			data:      "foo 42\x00",
+			wantError: true,
+		},
+		{
+			data:      "blob 0",
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		var got Prefix
+		err := got.UnmarshalBinary([]byte(test.data))
+		if err != nil {
+			if !test.wantError {
+				t.Errorf("new(Prefix).UnmarshalBinary([]byte(%q)) = %v; want <nil>", test.data, err)
+			}
+			continue
+		}
+		if test.wantError {
+			t.Errorf("new(Prefix).UnmarshalBinary([]byte(%q)) = <nil>; want error", test.data)
+			continue
+		}
+		if got != test.want {
+			t.Errorf("new(Prefix).UnarshalBinary([]byte(%q)) yields %+v; want %+v", test.data, got, test.want)
+		}
+	}
 }
 
 func hashLiteral(s string) githash.SHA1 {

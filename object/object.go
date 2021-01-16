@@ -22,6 +22,7 @@ https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
 package object
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"fmt"
 	"io"
@@ -62,6 +63,57 @@ func BlobSum(r io.Reader, size int64) (githash.SHA1, error) {
 	var sum githash.SHA1
 	h.Sum(sum[:0])
 	return sum, nil
+}
+
+// Prefix is a parsed Git object prefix like "blob 42\x00".
+type Prefix struct {
+	Type Type
+	Size int64
+}
+
+// MarshalBinary returns the result of AppendPrefix.
+func (p Prefix) MarshalBinary() ([]byte, error) {
+	if !p.Type.IsValid() {
+		return nil, fmt.Errorf("marshal git object prefix: unknown type %q", p.Type)
+	}
+	if p.Size < 0 {
+		return nil, fmt.Errorf("marshal git object prefix: negative size")
+	}
+	return AppendPrefix(nil, p.Type, p.Size), nil
+}
+
+// UnmarshalBinary parses an object prefix.
+func (p *Prefix) UnmarshalBinary(data []byte) error {
+	if len(data) == 0 || data[len(data)-1] != 0 {
+		return fmt.Errorf("unmarshal git object prefix: does not end with NUL")
+	}
+	typeEnd := bytes.IndexByte(data, ' ')
+	if typeEnd == -1 {
+		return fmt.Errorf("unmarshal git object prefix: missing space")
+	}
+	typ := Type(data[:typeEnd])
+	if !typ.IsValid() {
+		return fmt.Errorf("unmarshal git object prefix: unknown type %q", typ)
+	}
+	sizeStart := typeEnd + 1
+	sizeEnd := len(data) - 1
+	size, err := strconv.ParseInt(string(data[sizeStart:sizeEnd]), 10, 64)
+	if err != nil {
+		return fmt.Errorf("unmarshal git object prefix: size: %v", err)
+	}
+	if size < 0 {
+		return fmt.Errorf("unmarshal git object prefix: negative size")
+	}
+	p.Type = typ
+	p.Size = size
+	return nil
+}
+
+// String returns the prefix without the trailing NUL byte.
+func (p Prefix) String() string {
+	buf := AppendPrefix(nil, p.Type, p.Size)
+	buf = buf[:len(buf)-1]
+	return string(buf)
 }
 
 // AppendPrefix appends a Git object prefix (e.g. "blob 42\x00")
