@@ -124,6 +124,9 @@ func readIndexV2(r io.Reader) (*Index, error) {
 		if _, err := readFull(r, idx.ObjectIDs[i][:]); err != nil {
 			return nil, fmt.Errorf("read packfile index: object ids: %w", err)
 		}
+		if i > 0 && !idx.Less(i-1, i) {
+			return nil, fmt.Errorf("read packfile index: object ids: not sorted")
+		}
 	}
 	var buf [8]byte
 	for len(idx.PackedChecksums) < int(nobjs) {
@@ -195,6 +198,9 @@ func readIndexV1(r io.Reader) (*Index, error) {
 		idx.ObjectIDs = idx.ObjectIDs[:i+1]
 		if _, err := readFull(r, idx.ObjectIDs[i][:]); err != nil {
 			return nil, fmt.Errorf("read packfile index: entries: %w", err)
+		}
+		if i > 0 && !idx.Less(i-1, i) {
+			return nil, fmt.Errorf("read packfile index: entries: not sorted")
 		}
 	}
 	if _, err := readFull(r, idx.PackfileSHA1[:]); err != nil {
