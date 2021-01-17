@@ -30,7 +30,10 @@ type DeltaReader struct {
 	base  io.ReadSeeker
 	delta ByteReader
 
-	inited    bool
+	inited       bool
+	initError    error
+	expandedSize int64
+
 	curr      io.Reader
 	remaining uint32
 }
@@ -46,12 +49,19 @@ func NewDeltaReader(base io.ReadSeeker, delta ByteReader) *DeltaReader {
 
 func (d *DeltaReader) init() error {
 	if d.inited {
-		return nil
-	}
-	if _, _, err := readDeltaHeader(d.delta); err != nil {
-		return fmt.Errorf("apply delta: %w", err)
+		return d.initError
 	}
 	d.inited = true
+	_, expandedSize, err := readDeltaHeader(d.delta)
+	if err != nil {
+		d.initError = fmt.Errorf("apply delta: %w", d.initError)
+		return d.initError
+	}
+	if expandedSize >= 1<<63 {
+		d.initError = fmt.Errorf("apply delta: expanded size (%d) too large", expandedSize)
+		return d.initError
+	}
+	d.expandedSize = int64(expandedSize)
 	return nil
 }
 
@@ -65,6 +75,16 @@ func readDeltaHeader(r io.ByteReader) (baseObjectSize, expandedSize uint64, err 
 		return
 	}
 	return
+}
+
+// Size returns the expected size of the decompressed bytes as reported by the
+// delta header. Use DeltaObjectSize to determine the precise number of bytes
+// that the DeltaReader will produce.
+func (d *DeltaReader) Size() (int64, error) {
+	if err := d.init(); err != nil {
+		return 0, err
+	}
+	return d.expandedSize, nil
 }
 
 // Read implements io.Reader by decompressing the deltified object.
