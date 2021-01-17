@@ -27,7 +27,7 @@ import (
 // DeltaReader decompresses a deltified object from a packfile.
 // See details at https://git-scm.com/docs/pack-format#_deltified_representation
 type DeltaReader struct {
-	base  io.ReaderAt
+	base  io.ReadSeeker
 	delta ByteReader
 
 	inited    bool
@@ -37,7 +37,7 @@ type DeltaReader struct {
 
 // NewDeltaReader returns a new DeltaReader that applies the given delta to a
 // base object.
-func NewDeltaReader(base io.ReaderAt, delta ByteReader) *DeltaReader {
+func NewDeltaReader(base io.ReadSeeker, delta ByteReader) *DeltaReader {
 	return &DeltaReader{
 		base:  base,
 		delta: delta,
@@ -108,7 +108,10 @@ func (d *DeltaReader) readInstruction() error {
 		if err != nil {
 			return fmt.Errorf("apply delta: %w", err)
 		}
-		d.curr = io.NewSectionReader(d.base, int64(offset), int64(size))
+		if _, err := d.base.Seek(int64(offset), io.SeekStart); err != nil {
+			return fmt.Errorf("apply delta: %w", err)
+		}
+		d.curr = d.base
 		d.remaining = size
 	case instruction != 0:
 		// Add new data
