@@ -383,49 +383,13 @@ func (idx *Index) MarshalBinary() ([]byte, error) {
 // present in the index. The result is undefined if idx.ObjectIDs is not sorted.
 // This search is O(log len(idx.ObjectIDs)).
 func (idx *Index) FindID(id githash.SHA1) int {
-	i := idx.findID(id)
+	i := sort.Search(len(idx.ObjectIDs), func(i int) bool {
+		return bytes.Compare(idx.ObjectIDs[i][:], id[:]) >= 0
+	})
 	if i >= len(idx.ObjectIDs) || idx.ObjectIDs[i] != id {
 		return -1
 	}
 	return i
-}
-
-func (idx *Index) findID(id githash.SHA1) int {
-	return sort.Search(len(idx.ObjectIDs), func(i int) bool {
-		return bytes.Compare(idx.ObjectIDs[i][:], id[:]) >= 0
-	})
-}
-
-// FindOffset finds the position of offset in idx.Offsets or -1 if the offset
-// is not present in the index. This search is O(len(idx.Offsets)).
-func (idx *Index) FindOffset(offset int64) int {
-	for i, o := range idx.Offsets {
-		if o == offset {
-			return i
-		}
-	}
-	return -1
-}
-
-// insert inserts the given row into the three tables. It assumes that the
-// tables have enough capacity to a new row.
-func (idx *Index) insert(off int64, id githash.SHA1, checksum uint32) {
-	i := idx.findID(id)
-	if i < len(idx.ObjectIDs) && idx.ObjectIDs[i] == id {
-		return
-	}
-
-	idx.Offsets = idx.Offsets[:len(idx.Offsets)+1]
-	copy(idx.Offsets[i+1:], idx.Offsets[i:])
-	idx.Offsets[i] = off
-
-	idx.ObjectIDs = idx.ObjectIDs[:len(idx.ObjectIDs)+1]
-	copy(idx.ObjectIDs[i+1:], idx.ObjectIDs[i:])
-	idx.ObjectIDs[i] = id
-
-	idx.PackedChecksums = idx.PackedChecksums[:len(idx.PackedChecksums)+1]
-	copy(idx.PackedChecksums[i+1:], idx.PackedChecksums[i:])
-	idx.PackedChecksums[i] = checksum
 }
 
 // Len returns the number of objects in the index.

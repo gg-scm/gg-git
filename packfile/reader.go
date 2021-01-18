@@ -25,6 +25,7 @@ import (
 	"io/ioutil"
 
 	"gg-scm.io/pkg/git/githash"
+	"gg-scm.io/pkg/git/object"
 )
 
 // ByteReader is a combination of io.Reader and io.ByteReader.
@@ -263,6 +264,23 @@ func (typ ObjectType) isValid() bool {
 		typ == Tag ||
 		typ == OffsetDelta ||
 		typ == RefDelta
+}
+
+// NonDelta returns the Git object type that the packfile object type represents
+// or the empty string if the type represents a deltified object.
+func (t ObjectType) NonDelta() object.Type {
+	switch t {
+	case Commit:
+		return object.TypeCommit
+	case Tree:
+		return object.TypeTree
+	case Blob:
+		return object.TypeBlob
+	case Tag:
+		return object.TypeTag
+	default:
+		return ""
+	}
 }
 
 // String returns the Git object type constant name like "OBJ_COMMIT".

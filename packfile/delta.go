@@ -18,7 +18,6 @@ package packfile
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -152,7 +151,7 @@ func DeltaObjectSize(delta ByteReader) (int64, error) {
 	var n int64
 	for {
 		instruction, err := delta.ReadByte()
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF {
 			return n, nil
 		}
 		if err != nil {
@@ -186,7 +185,7 @@ func readCopyBaseInstruction(instruction byte, r io.ByteReader) (offset, size ui
 			continue
 		}
 		b, err := r.ReadByte()
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF {
 			return 0, 0, io.ErrUnexpectedEOF
 		}
 		if err != nil {
@@ -199,7 +198,7 @@ func readCopyBaseInstruction(instruction byte, r io.ByteReader) (offset, size ui
 			continue
 		}
 		b, err := r.ReadByte()
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF {
 			return 0, 0, io.ErrUnexpectedEOF
 		}
 		if err != nil {
