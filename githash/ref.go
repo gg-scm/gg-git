@@ -42,17 +42,24 @@ func TagRef(t string) Ref {
 	return tagPrefix + Ref(t)
 }
 
-// IsValid reports whether r is a valid reference.
+// IsValid reports whether r is a valid reference name.
+// See https://git-scm.com/docs/git-check-ref-format for rules.
 func (r Ref) IsValid() bool {
-	// See https://git-scm.com/docs/git-check-ref-format for details.
-	return r != "" &&
-		r[0] != '-' && r[0] != '.' &&
-		r[len(r)-1] != '.' &&
-		!strings.ContainsAny(string(r), " :~^\\") &&
+	return r != "" && r != "@" &&
+		r[0] != '-' && r[0] != '.' && r[0] != '/' &&
+		r[len(r)-1] != '.' && r[len(r)-1] != '/' &&
+		strings.IndexFunc(string(r), func(c rune) bool {
+			return c < 0x20 || c == 0x7f ||
+				c == ' ' || c == '~' || c == '^' || c == ':' ||
+				c == '?' || c == '*' || c == '[' ||
+				c == '\\'
+		}) < 0 &&
 		!strings.Contains(string(r), "..") &&
 		!strings.Contains(string(r), "@{") &&
 		!strings.Contains(string(r), "//") &&
-		!strings.Contains(string(r), "/.")
+		!strings.Contains(string(r), "/.") &&
+		!strings.Contains(string(r), ".lock/") &&
+		!strings.HasSuffix(string(r), ".lock")
 }
 
 // String returns the ref as a string.

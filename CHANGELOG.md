@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  Removed the `packfile.ApplyDelta` function. The `packfile.DeltaReader` type
    performs the same function but permits more control over how it's used.
 
+### Fixed
+
+-  `Ref.IsValid` produces less false positives than before.
+   ([#16](https://github.com/gg-scm/gg-git/issues/16))
+
 ## [0.8.1][] - 2021-01-02
 
 Version 0.8.1 updates the README.
