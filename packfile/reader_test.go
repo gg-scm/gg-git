@@ -312,3 +312,60 @@ func hashLiteral(s string) githash.SHA1 {
 	}
 	return h
 }
+
+func BenchmarkReader(b *testing.B) {
+	data, err := ioutil.ReadFile(filepath.Join("testdata", "FirstCommit.pack"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	htonl(data[8:], 0xffffffff)
+	stream := &infinitePackfile{data: data}
+	r := NewReader(stream)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := io.Copy(ioutil.Discard, r); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.SetBytes(stream.nread)
+}
+
+// infinitePackfile repeats the objects in a packfile in an endless cycle.
+// The only caveat is the number of objects in the file header must be changed
+// to a sufficiently large number.
+type infinitePackfile struct {
+	data  []byte
+	pos   int
+	nread int64
+}
+
+func (ip *infinitePackfile) Read(p []byte) (int, error) {
+	eof := len(ip.data) - githash.SHA1Size
+	if ip.pos >= eof {
+		ip.pos = fileHeaderSize
+	}
+	n := copy(p, ip.data[ip.pos:eof])
+	ip.pos += n
+	ip.nread += int64(n)
+	return n, nil
+}
+
+func (ip *infinitePackfile) ReadByte() (byte, error) {
+	eof := len(ip.data) - githash.SHA1Size
+	if ip.pos >= eof {
+		ip.pos = fileHeaderSize
+	}
+	b := ip.data[ip.pos]
+	ip.pos++
+	ip.nread++
+	return b, nil
+}
