@@ -71,11 +71,11 @@ func readFileHeader(r io.Reader) (uint32, error) {
 	if buf[0] != 'P' || buf[1] != 'A' || buf[2] != 'C' || buf[3] != 'K' {
 		return 0, errors.New("packfile: read header: incorrect signature")
 	}
-	version := uint32(buf[4])<<24 | uint32(buf[5])<<16 | uint32(buf[6])<<8 | uint32(buf[7])
+	version := ntohl(buf[4:])
 	if version != 2 {
 		return 0, fmt.Errorf("packfile: read header: version is %d (only supports 2)", version)
 	}
-	nobjs := uint32(buf[8])<<24 | uint32(buf[9])<<16 | uint32(buf[10])<<8 | uint32(buf[11])
+	nobjs := ntohl(buf[8:])
 	return nobjs, nil
 }
 

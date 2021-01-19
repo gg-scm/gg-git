@@ -54,15 +54,13 @@ func (w *Writer) init() error {
 	if w.wc.n > 0 {
 		return nil
 	}
-	_, err := w.wc.Write([]byte{
+	fileHeader := []byte{
 		'P', 'A', 'C', 'K',
 		0, 0, 0, 2, // version 2
-		byte(w.nobjs >> 24),
-		byte(w.nobjs >> 16),
-		byte(w.nobjs >> 8),
-		byte(w.nobjs),
-	})
-	if err != nil {
+		0, 0, 0, 0,
+	}
+	htonl(fileHeader[8:], w.nobjs)
+	if _, err := w.wc.Write(fileHeader); err != nil {
 		return fmt.Errorf("packfile: write header: %w", err)
 	}
 	return nil
