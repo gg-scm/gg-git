@@ -412,15 +412,6 @@ func (idx *Index) Swap(i, j int) {
 	}
 }
 
-func (idx *Index) hasOffset(off int64) bool {
-	for _, elem := range idx.Offsets {
-		if elem == off {
-			return true
-		}
-	}
-	return false
-}
-
 // ntohl converts a network byte order (big-endian) uint32 and converts it to
 // a uint32.
 func ntohl(x []byte) uint32 {

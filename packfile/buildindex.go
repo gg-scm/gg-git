@@ -19,23 +19,24 @@ package packfile
 import (
 	"bufio"
 	"bytes"
-	"compress/zlib"
 	"crypto/sha1"
-	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"io/ioutil"
-	"os"
 	"sort"
+	"sync"
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/object"
 )
 
-func BuildIndex(f io.ReaderAt, fileSize int64, storage SHA1ObjectReadWriter) (*Index, error) {
+// BuildIndex indexes a packfile. This is equivalent to running git-index-pack(1)
+// on the packfile.
+func BuildIndex(f io.ReaderAt, fileSize int64) (*Index, error) {
 	fileHash := sha1.New()
-	hashTee := teeByteReader{
+	hashTee := &teeByteReader{
 		r: bufio.NewReader(io.NewSectionReader(f, 0, fileSize)),
 		w: fileHash,
 	}
@@ -65,58 +66,121 @@ func BuildIndex(f io.ReaderAt, fileSize int64, storage SHA1ObjectReadWriter) (*I
 		return nil, fmt.Errorf("packfile: build index: trailing data in packfile")
 	}
 
-	// Index deltified objects.
-	// Deltified objects may use other deltified objects as a base, so we sweep
-	// over deltified objects until we converge (iterative instead of recursive).
-	ds := &deltaSweeper{
-		baseIndex: *base,
-		fileSize:  fileSize,
-		storage:   storage,
+	// Index deltified objects if needed.
+	if !base.hasDeltas() {
+		return base.Index, nil
 	}
-	for ds.needsSweep() {
-		if err := ds.sweep(f); err != nil {
+	c := newDeltaCrawler(f, base)
+	defer c.wait()
+	var rootReader *bufio.Reader
+	var z zlibReader
+	readBaseObject := func(offset int64) (object.Type, []byte, error) {
+		section := io.NewSectionReader(f, offset, fileSize-offset)
+		if rootReader == nil {
+			rootReader = bufio.NewReader(section)
+		} else {
+			rootReader.Reset(section)
+		}
+		hdr, err := ReadHeader(offset, rootReader)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := setZlibReader(&z, rootReader); err != nil {
+			return "", nil, err
+		}
+		buf := bytes.NewBuffer(make([]byte, 0, int(hdr.Size)))
+		if _, err := io.Copy(buf, z); err != nil {
+			return "", nil, err
+		}
+		return hdr.Type.NonDelta(), buf.Bytes(), nil
+	}
+
+	// First: offsets.
+	for _, root := range base.rootOffsets {
+		typ, data, err := readBaseObject(root)
+		if err != nil {
 			return nil, fmt.Errorf("packfile: build index: %w", err)
 		}
+		c.mu.Lock()
+		children := c.childrenByOffset[root]
+		delete(c.childrenByOffset, root)
+		c.mu.Unlock()
+		for _, child := range children {
+			c.startCrawl(typ, bytes.NewReader(data), child)
+		}
 	}
-	return ds.buildIndex(), nil
-}
 
-type deltaHeader struct {
-	offset      int64
-	sectionSize int
-	// baseOffset is the Offset of a previous Header for an OffsetDelta type object.
-	baseOffset int64
-	// baseObject is the hash of an object for a RefDelta type object.
-	baseObject githash.SHA1
-	crc32      uint32
-}
+	// Finally: object IDs.
+	for {
+		c.mu.Lock()
+		i := -1
+		var children []*deltaObject
+		for id, potentialChildren := range c.childrenByID {
+			i = base.Index.FindID(id)
+			if i != -1 {
+				children = potentialChildren
+				delete(c.childrenByID, id)
+				break
+			}
+		}
+		c.mu.Unlock()
+		if i == -1 {
+			// All remaining object ID references are to other deltified objects.
+			// TODO(soon): Check storage to thicken pack.
+			break
+		}
 
-func (dhdr *deltaHeader) typ() ObjectType {
-	if dhdr.baseOffset != 0 {
-		return OffsetDelta
+		root := base.Index.Offsets[i]
+		typ, data, err := readBaseObject(root)
+		if err != nil {
+			return nil, fmt.Errorf("packfile: build index: %w", err)
+		}
+		for _, child := range children {
+			c.startCrawl(typ, bytes.NewReader(data), child)
+		}
 	}
-	return RefDelta
+
+	if err := c.wait(); err != nil {
+		return nil, fmt.Errorf("packfile: build index: %w", err)
+	}
+	sort.Sort(c.newIndex)
+	return c.newIndex, nil
 }
 
 type baseIndex struct {
 	*Index
-	offsetToID   map[int64]githash.SHA1
-	deltaHeaders []*deltaHeader
+	rootOffsets      []int64
+	childrenByOffset map[int64][]*deltaObject
+	childrenByID     map[githash.SHA1][]*deltaObject
 }
 
-// basePass indexes any non-deltified objects.
+func (base *baseIndex) hasDeltas() bool {
+	return len(base.childrenByOffset)+len(base.childrenByID) > 0
+}
+
+type deltaObject struct {
+	offset      int64
+	sectionSize int
+	crc32       uint32
+}
+
+// basePass indexes any non-deltified objects and builds a tree of deltified
+// objects to undeltify.
 func baseIndexPass(r *byteReaderCounter, nobjs uint32) (*baseIndex, error) {
+	const maxDeltaObjectSize = 16 << 20 // 16 MiB
 	result := &baseIndex{
 		Index: &Index{
 			ObjectIDs:       make([]githash.SHA1, 0, int(nobjs)),
 			Offsets:         make([]int64, 0, int(nobjs)),
 			PackedChecksums: make([]uint32, 0, int(nobjs)),
 		},
-		offsetToID: make(map[int64]githash.SHA1),
+		childrenByOffset: make(map[int64][]*deltaObject),
+		childrenByID:     make(map[githash.SHA1][]*deltaObject),
 	}
+	sizes := make([]int64, 0, int(nobjs))
 	sha1Hash := sha1.New()
 	c := crc32.NewIEEE()
-	t := teeByteReader{r: r, w: c}
+	t := &teeByteReader{r: r, w: c}
 	var z zlibReader
 	for ; nobjs > 0; nobjs-- {
 		c.Reset()
@@ -141,16 +205,31 @@ func baseIndexPass(r *byteReaderCounter, nobjs uint32) (*baseIndex, error) {
 				return nil, errTooLong
 			}
 			sectionSize := r.n - hdr.Offset
-			if sectionSize > 16<<20 { // 16 MiB
+			if sectionSize > maxDeltaObjectSize {
 				return nil, fmt.Errorf("compressed deltified object too large (%d bytes)", hdr.Size)
 			}
-			result.deltaHeaders = append(result.deltaHeaders, &deltaHeader{
+			dobj := &deltaObject{
 				offset:      hdr.Offset,
 				sectionSize: int(sectionSize),
-				baseOffset:  hdr.BaseOffset,
-				baseObject:  hdr.BaseObject,
 				crc32:       c.Sum32(),
-			})
+			}
+			switch hdr.Type {
+			case RefDelta:
+				result.childrenByID[hdr.BaseObject] = append(result.childrenByID[hdr.BaseObject], dobj)
+			case OffsetDelta:
+				result.childrenByOffset[hdr.BaseOffset] = append(result.childrenByOffset[hdr.BaseOffset], dobj)
+				// While we're building the base index, the Offsets slice is sorted.
+				// Since the offsets are always negative, we will know definitively
+				// whether the base is deltified or not.
+				if i := searchInt64(result.Offsets, hdr.BaseOffset); i != -1 {
+					if baseObjectSize := sizes[i]; baseObjectSize > maxDeltaObjectSize {
+						return nil, fmt.Errorf("delta object base too large (%d bytes)", baseObjectSize)
+					}
+					result.rootOffsets = append(result.rootOffsets, hdr.BaseOffset)
+				}
+			default:
+				panic("unreachable")
+			}
 			continue
 		}
 		sha1Hash.Reset()
@@ -170,234 +249,156 @@ func baseIndexPass(r *byteReaderCounter, nobjs uint32) (*baseIndex, error) {
 		result.Offsets = append(result.Offsets, hdr.Offset)
 		result.ObjectIDs = append(result.ObjectIDs, sum)
 		result.PackedChecksums = append(result.PackedChecksums, c.Sum32())
-		result.offsetToID[hdr.Offset] = sum
+		sizes = append(sizes, hdr.Size)
 	}
 
 	// We inserted in offset order. Index is expected to be in object ID order.
-	// (Sorting in bulk is more efficient than doing an insertion sort.)
+	// Sorting in bulk is more efficient than doing an insertion sort and lets
+	// us use the Offsets table for various delta-related things above.
 	sort.Sort(result.Index)
 	return result, nil
 }
 
-type deltaSweeper struct {
-	baseIndex
-	additions Index // unsorted
-
-	fileSize int64
-	storage  SHA1ObjectReadWriter
+func searchInt64(slice []int64, x int64) int {
+	i := sort.Search(len(slice), func(i int) bool { return slice[i] >= x })
+	if i >= len(slice) || slice[i] != x {
+		return -1
+	}
+	return i
 }
 
-func (ds *deltaSweeper) buildIndex() *Index {
-	if ds.additions.Len() > 0 {
-		ds.Offsets = append(ds.Offsets, ds.additions.Offsets...)
-		ds.ObjectIDs = append(ds.ObjectIDs, ds.additions.ObjectIDs...)
-		ds.PackedChecksums = append(ds.PackedChecksums, ds.additions.PackedChecksums...)
-		sort.Sort(ds.Index)
-		ds.additions = Index{}
-	}
-	return ds.Index
+// deltaCrawler manages a group of goroutines that undeltify objects for indexing.
+type deltaCrawler struct {
+	f   io.ReaderAt
+	sem chan *undeltifier
+	wg  sync.WaitGroup
+
+	errOnce sync.Once
+	err     error
+
+	mu               sync.Mutex
+	newIndex         *Index // unsorted
+	childrenByOffset map[int64][]*deltaObject
+	childrenByID     map[githash.SHA1][]*deltaObject
 }
 
-func (ds *deltaSweeper) needsSweep() bool {
-	return len(ds.deltaHeaders) > 0
+func newDeltaCrawler(f io.ReaderAt, base *baseIndex) *deltaCrawler {
+	c := &deltaCrawler{
+		f:                f,
+		sem:              make(chan *undeltifier, 2),
+		newIndex:         new(Index),
+		childrenByOffset: base.childrenByOffset,
+		childrenByID:     base.childrenByID,
+	}
+	*c.newIndex = *base.Index
+	for i := 0; i < cap(c.sem); i++ {
+		c.sem <- new(undeltifier)
+	}
+	return c
 }
 
-func (ds *deltaSweeper) sweep(r io.ReaderAt) error {
-	remaining := 0
-	sem := make(chan struct{}, 4)
-	results := make(chan indexResult)
-	var firstErr error
-loop:
-	for _, dhdr := range ds.deltaHeaders {
-		basePrefix, baseObject, err := ds.lookupBaseObject(r, dhdr)
-		if errors.Is(err, os.ErrNotExist) {
-			// Base is deltified and hasn't been expanded yet.
-			// Skip until next sweep.
-			ds.deltaHeaders[remaining] = dhdr
-			remaining++
-			continue
-		}
-		if err != nil {
-			firstErr = err
-			break loop
-		}
-	startIndex:
-		for {
-			select {
-			case sem <- struct{}{}:
-				// Acquired semaphore. Ready to start more indexing.
-				dhdr := dhdr
-				go func() {
-					defer func() { <-sem }()
-					deltaObject := make([]byte, int(dhdr.sectionSize))
-					if _, err := r.ReadAt(deltaObject, dhdr.offset); err != nil {
-						baseObject.Close()
-						results <- indexResult{err: err}
-						return
-					}
-					sum, err := indexDeltifiedObject(ds.storage, basePrefix, baseObject, dhdr.offset, deltaObject)
-					baseObject.Close()
-					if err != nil {
-						results <- indexResult{err: err}
-						return
-					}
-					results <- indexResult{
-						offset:   dhdr.offset,
-						sha1:     sum,
-						checksum: dhdr.crc32,
-					}
-				}()
-				break startIndex
-			case r := <-results:
-				// Finished indexing one of the objects.
-				if r.err != nil {
-					baseObject.Close()
-					firstErr = r.err
-					break loop
-				}
-				ds.add(r)
-			}
-		}
-	}
-
-	// Wait until all objects are done being indexed.
-	for i := 0; i < cap(sem); {
-		select {
-		case sem <- struct{}{}:
-			i++
-		case r := <-results:
-			if r.err == nil {
-				ds.add(r)
-			} else if r.err != nil && firstErr == nil {
-				firstErr = r.err
-			}
-		}
-	}
-	if firstErr != nil {
-		ds.deltaHeaders = nil
-		return firstErr
-	}
-	if remaining == len(ds.deltaHeaders) {
-		// TODO(someday): Add details of missing objects
-		return fmt.Errorf("unable to un-deltify %d objects", remaining)
-	}
-	ds.deltaHeaders = ds.deltaHeaders[:remaining]
-	return nil
+// startCrawl starts a goroutine to index a deltified object and its descendants.
+func (c *deltaCrawler) startCrawl(typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) {
+	// TODO(someday): Don't start crawling if c.err != nil.
+	u := <-c.sem
+	c.wg.Add(1)
+	go c.crawl(u, typ, baseObject, obj)
 }
 
-type indexResult struct {
-	offset   int64
-	sha1     githash.SHA1
-	checksum uint32
-	err      error
-}
-
-func indexDeltifiedObject(storage SHA1ObjectReadWriter, basePrefix object.Prefix, baseObject io.ReadSeeker, deltaOffset int64, deltaObject []byte) (githash.SHA1, error) {
-	deltaObjectReader := bytes.NewReader(deltaObject)
-	if _, err := ReadHeader(deltaOffset, deltaObjectReader); err != nil {
-		return githash.SHA1{}, err
-	}
-	z, err := zlib.NewReader(deltaObjectReader)
+// crawl indexes a deltified object and its descendants.
+func (c *deltaCrawler) crawl(u *undeltifier, typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) {
+	defer c.wg.Done()
+	parent, children, err := c.process(u, typ, baseObject, obj)
 	if err != nil {
-		return githash.SHA1{}, err
+		c.sem <- u // release
+		c.errOnce.Do(func() { c.err = err })
+		return
 	}
-	newObjectReader := NewDeltaReader(baseObject, bufio.NewReader(z))
+	if len(children) == 0 {
+		c.sem <- u // release
+		return
+	}
+	// The first child inherits the acquired undeltifier.
+	c.wg.Add(1)
+	go c.crawl(u, typ, bytes.NewReader(parent), children[0])
+	// Subsequent children must acquire undeltifiers from the semaphore.
+	// Each baseObject bytes.Reader must be separate to avoid races.
+	for _, child := range children[1:] {
+		c.startCrawl(typ, bytes.NewReader(parent), child)
+	}
+}
+
+// process processes a single deltified object and returns the location of any
+// new deltified objects that can be processed as a result.
+func (c *deltaCrawler) process(u *undeltifier, typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) ([]byte, []*deltaObject, error) {
+	deltaPackObject := make([]byte, obj.sectionSize)
+	if _, err := c.f.ReadAt(deltaPackObject, obj.offset); err != nil {
+		return nil, nil, err
+	}
+	id, data, err := u.undeltify(typ, baseObject, bytes.NewReader(deltaPackObject))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var children []*deltaObject
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.newIndex.Offsets = append(c.newIndex.Offsets, obj.offset)
+	c.newIndex.ObjectIDs = append(c.newIndex.ObjectIDs, id)
+	c.newIndex.PackedChecksums = append(c.newIndex.PackedChecksums, obj.crc32)
+	children = append(children, c.childrenByOffset[obj.offset]...)
+	delete(c.childrenByOffset, obj.offset)
+	children = append(children, c.childrenByID[id]...)
+	delete(c.childrenByID, id)
+	return data, children, nil
+}
+
+// wait waits any crawl operations to finish and returns the first error that
+// occurred, if any. wait may be called multiple times, but startCrawl must not
+// be called after wait returns.
+func (c *deltaCrawler) wait() error {
+	c.wg.Wait()
+	c.errOnce.Do(func() {})
+	return c.err
+}
+
+// An undeltifier decompresses deltified objects. The zero value is a valid
+// undeltifier.
+//
+// The fields of undeltifier are expensive to create in a tight loop. Reusing
+// an undeltifier reduces memory allocations.
+type undeltifier struct {
+	z    zlibReader
+	sha1 hash.Hash
+}
+
+func (u *undeltifier) undeltify(typ object.Type, baseObject io.ReadSeeker, deltaPackObject ByteReader) (githash.SHA1, []byte, error) {
+	if _, err := ReadHeader(0, deltaPackObject); err != nil {
+		return githash.SHA1{}, nil, err
+	}
+	if err := setZlibReader(&u.z, deltaPackObject); err != nil {
+		return githash.SHA1{}, nil, err
+	}
+	defer setZlibReader(&u.z, emptyReader{}) // don't retain deltaPackObject past function return
+	newObjectReader := NewDeltaReader(baseObject, bufio.NewReader(u.z))
 	newSize, err := newObjectReader.Size()
 	if err != nil {
-		return githash.SHA1{}, err
+		return githash.SHA1{}, nil, err
 	}
-	newPrefix := object.Prefix{
-		Type: basePrefix.Type,
-		Size: newSize,
+	newObject := bytes.NewBuffer(make([]byte, 0, newSize))
+	if _, err := io.Copy(newObject, newObjectReader); err != nil {
+		return githash.SHA1{}, nil, err
 	}
-	newObject, err := storage.WriteSHA1Object(newPrefix)
-	if err != nil {
-		return githash.SHA1{}, err
+	if u.sha1 == nil {
+		u.sha1 = sha1.New()
+	} else {
+		u.sha1.Reset()
 	}
-	_, copyErr := io.Copy(newObject, newObjectReader)
-	sum, finishErr := newObject.FinishObject()
-	if copyErr != nil {
-		return githash.SHA1{}, copyErr
-	}
-	if finishErr != nil {
-		return githash.SHA1{}, finishErr
-	}
+	u.sha1.Write(object.AppendPrefix(nil, typ, int64(newObject.Len())))
+	u.sha1.Write(newObject.Bytes())
 	var sumSHA1 githash.SHA1
-	copy(sumSHA1[:], sum)
-	return sumSHA1, nil
-}
-
-func (ib *deltaSweeper) lookupBaseObject(r io.ReaderAt, dhdr *deltaHeader) (object.Prefix, ReadSeekCloser, error) {
-	var baseObjectID githash.SHA1
-	switch dhdr.typ() {
-	case OffsetDelta:
-		var ok bool
-		baseObjectID, ok = ib.offsetToID[dhdr.baseOffset]
-		if !ok {
-			// Base is deltified and hasn't been expanded yet.
-			return object.Prefix{}, nil, os.ErrNotExist
-		}
-	case RefDelta:
-		baseObjectID = dhdr.baseObject
-	default:
-		panic("unknown deltified type")
-	}
-	basePrefix, baseObject, err := ib.storage.ReadSHA1Object(baseObjectID)
-	if err == nil {
-		return basePrefix, baseObject, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return object.Prefix{}, nil, err
-	}
-	baseIndex := ib.FindID(baseObjectID)
-	if baseIndex == -1 {
-		// Base is deltified and hasn't been expanded yet.
-		return object.Prefix{}, nil, os.ErrNotExist
-	}
-	// Not in storage, but is present in index. This means it's one of the objects
-	// collected during the base pass.
-	baseOffset := ib.Offsets[baseIndex]
-	sr := bufio.NewReader(io.NewSectionReader(r, baseOffset, ib.fileSize-baseOffset))
-	baseHdr, err := ReadHeader(baseOffset, sr)
-	if err != nil {
-		return object.Prefix{}, nil, err
-	}
-	w, err := ib.storage.WriteSHA1Object(object.Prefix{
-		Type: baseHdr.Type.NonDelta(),
-		Size: baseHdr.Size,
-	})
-	if err != nil {
-		return object.Prefix{}, nil, err
-	}
-	z, err := zlib.NewReader(sr)
-	if err != nil {
-		return object.Prefix{}, nil, err
-	}
-	_, copyErr := io.Copy(w, z)
-	gotSum, finishErr := w.FinishObject()
-	if copyErr != nil {
-		return object.Prefix{}, nil, copyErr
-	}
-	if finishErr != nil {
-		return object.Prefix{}, nil, finishErr
-	}
-	var got githash.SHA1
-	copy(got[:], gotSum)
-	if got != baseObjectID {
-		return object.Prefix{}, nil, fmt.Errorf("object %v has unexpected SHA-1 hash %v after writing", baseObjectID, got)
-	}
-	basePrefix, baseObject, err = ib.storage.ReadSHA1Object(baseObjectID)
-	if errors.Is(err, os.ErrNotExist) {
-		err = fmt.Errorf("object %v does not exist after being written", baseObjectID)
-	}
-	return basePrefix, baseObject, err
-}
-
-func (ds *deltaSweeper) add(r indexResult) {
-	ds.additions.Offsets = append(ds.additions.Offsets, r.offset)
-	ds.additions.ObjectIDs = append(ds.additions.ObjectIDs, r.sha1)
-	ds.additions.PackedChecksums = append(ds.additions.PackedChecksums, r.checksum)
-	ds.offsetToID[r.offset] = r.sha1
+	u.sha1.Sum(sumSHA1[:0])
+	return sumSHA1, newObject.Bytes(), nil
 }
 
 type teeByteReader struct {
@@ -406,7 +407,7 @@ type teeByteReader struct {
 	buf [1]byte
 }
 
-func (t teeByteReader) Read(p []byte) (int, error) {
+func (t *teeByteReader) Read(p []byte) (int, error) {
 	n, rerr := t.r.Read(p)
 	_, werr := t.w.Write(p[:n])
 	if rerr != nil {
@@ -415,7 +416,7 @@ func (t teeByteReader) Read(p []byte) (int, error) {
 	return n, werr
 }
 
-func (t teeByteReader) ReadByte() (byte, error) {
+func (t *teeByteReader) ReadByte() (byte, error) {
 	b, rerr := t.r.ReadByte()
 	t.buf[0] = b
 	_, werr := t.w.Write(t.buf[:])
@@ -423,4 +424,14 @@ func (t teeByteReader) ReadByte() (byte, error) {
 		return b, rerr
 	}
 	return b, werr
+}
+
+type emptyReader struct{}
+
+func (emptyReader) Read(_ []byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (emptyReader) ReadByte() (byte, error) {
+	return 0, io.EOF
 }

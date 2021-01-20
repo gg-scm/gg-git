@@ -17,10 +17,13 @@
 package packfile
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"gg-scm.io/pkg/git/githash"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
@@ -37,7 +40,7 @@ func TestBuildIndex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := BuildIndex(f, info.Size(), ObjectDir(t.TempDir()))
+			got, err := BuildIndex(f, info.Size())
 			if err != nil {
 				t.Log("Error:", err)
 				if !test.wantError {
@@ -51,4 +54,35 @@ func TestBuildIndex(t *testing.T) {
 			}
 		})
 	}
+}
+
+func BenchmarkBuildIndex(b *testing.B) {
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf, uint32(b.N))
+	for i := 0; i < b.N; i++ {
+		data := fmt.Sprintf("blob %10d\n", i)
+		_, err := w.WriteHeader(&Header{
+			Type: Blob,
+			Size: int64(len(data)),
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := w.Write([]byte(data)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	_, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	objectByteCount := buf.Len() - githash.SHA1Size - fileHeaderSize
+	b.SetBytes(int64(float64(objectByteCount) / float64(b.N)))
+	b.ReportMetric(float64(objectByteCount), "packfile-bytes")
 }
