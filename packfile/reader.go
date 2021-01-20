@@ -177,18 +177,18 @@ func ReadHeader(offset int64, r ByteReader) (*Header, error) {
 	var err error
 	hdr.Type, hdr.Size, err = readLengthType(r)
 	if err != nil {
-		return nil, fmt.Errorf("packfile: %w", err)
+		return nil, err
 	}
 	switch hdr.Type {
 	case OffsetDelta:
 		off, err := readOffset(r)
 		if err != nil {
-			return nil, fmt.Errorf("packfile: %w", err)
+			return nil, err
 		}
 		hdr.BaseOffset = hdr.Offset + off
 	case RefDelta:
 		if _, err := io.ReadFull(r, hdr.BaseObject[:]); err != nil {
-			return nil, fmt.Errorf("packfile: read ref-delta object: %w", err)
+			return nil, fmt.Errorf("read ref-delta object: %w", err)
 		}
 	}
 	return hdr, nil
@@ -197,20 +197,20 @@ func ReadHeader(offset int64, r ByteReader) (*Header, error) {
 func readLengthType(br io.ByteReader) (ObjectType, int64, error) {
 	first, err := br.ReadByte()
 	if err != nil {
-		return 0, 0, fmt.Errorf("read object length+type: %w", err)
+		return 0, 0, fmt.Errorf("read packfile object length+type: %w", err)
 	}
 	typ := ObjectType(first >> 4 & 7)
 	if typ == 0 || typ == 5 {
-		return 0, 0, fmt.Errorf("read object length+type: invalid type %d", int(typ))
+		return 0, 0, fmt.Errorf("read packfile object length+type: invalid type %d", int(typ))
 	}
 	n := int64(first & 0xf)
 	if first&0x80 != 0 {
 		nn, err := binary.ReadUvarint(br)
 		if err != nil {
-			return typ, 0, fmt.Errorf("read object length+type: %w", err)
+			return typ, 0, fmt.Errorf("read packfile object length+type: %w", err)
 		}
 		if nn >= 1<<(63-4) {
-			return typ, 0, fmt.Errorf("read object length+type: too large")
+			return typ, 0, fmt.Errorf("read packfile object length+type: too large")
 		}
 		n |= int64(nn << 4)
 	}
@@ -231,7 +231,7 @@ func readOffset(br io.ByteReader) (int64, error) {
 	for i := 0; i < 8; i++ {
 		b, err := br.ReadByte()
 		if err != nil {
-			return 0, fmt.Errorf("read offset: %w", err)
+			return 0, fmt.Errorf("read packfile base offset: %w", err)
 		}
 		bits <<= 7
 		bits |= int64(b & 0x7f)
@@ -240,7 +240,7 @@ func readOffset(br io.ByteReader) (int64, error) {
 		}
 		accum += 1 << ((i + 1) * 7)
 	}
-	return 0, fmt.Errorf("read offset: too large")
+	return 0, fmt.Errorf("read packfile base offset: too large")
 }
 
 // An ObjectType holds the type of an object inside a packfile.
