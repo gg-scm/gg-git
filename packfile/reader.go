@@ -109,7 +109,7 @@ func (r *Reader) Next() (*Header, error) {
 		}
 		return nil, io.EOF
 	}
-	hdr, err := ReadHeader(r.r.n, &r.r)
+	hdr, err := readObjectHeader(r.r.n, &r.r)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +173,14 @@ type Header struct {
 // an error, the data of the object will be available on r as a zlib-compressed
 // stream.
 func ReadHeader(offset int64, r ByteReader) (*Header, error) {
+	hdr, err := readObjectHeader(offset, r)
+	if err != nil {
+		return nil, fmt.Errorf("packfile: %w", err)
+	}
+	return hdr, nil
+}
+
+func readObjectHeader(offset int64, r ByteReader) (*Header, error) {
 	hdr := &Header{Offset: offset}
 	var err error
 	hdr.Type, hdr.Size, err = readLengthType(r)

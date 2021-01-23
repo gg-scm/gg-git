@@ -81,7 +81,7 @@ func BuildIndex(f io.ReaderAt, fileSize int64) (*Index, error) {
 		} else {
 			rootReader.Reset(section)
 		}
-		hdr, err := ReadHeader(offset, rootReader)
+		hdr, err := readObjectHeader(offset, rootReader)
 		if err != nil {
 			return "", nil, err
 		}
@@ -164,10 +164,15 @@ type deltaObject struct {
 	crc32       uint32
 }
 
+// maxDeltaObjectSize is the maximum number of bytes that will be held in memory
+// for a single object during undeltification. Note that during undeltifying,
+// both the base and target object must be held in memory, so the maximum amount
+// of memory used will be 2 * maxDeltaObjectSize.
+const maxDeltaObjectSize = 16 << 20 // 16 MiB
+
 // basePass indexes any non-deltified objects and builds a tree of deltified
 // objects to undeltify.
 func baseIndexPass(r *byteReaderCounter, nobjs uint32) (*baseIndex, error) {
-	const maxDeltaObjectSize = 16 << 20 // 16 MiB
 	result := &baseIndex{
 		Index: &Index{
 			ObjectIDs:       make([]githash.SHA1, 0, int(nobjs)),
@@ -184,7 +189,7 @@ func baseIndexPass(r *byteReaderCounter, nobjs uint32) (*baseIndex, error) {
 	var z zlibReader
 	for ; nobjs > 0; nobjs-- {
 		c.Reset()
-		hdr, err := ReadHeader(r.n, t)
+		hdr, err := readObjectHeader(r.n, t)
 		if err != nil {
 			return nil, err
 		}
@@ -270,7 +275,7 @@ func searchInt64(slice []int64, x int64) int {
 // deltaCrawler manages a group of goroutines that undeltify objects for indexing.
 type deltaCrawler struct {
 	f   io.ReaderAt
-	sem chan *undeltifier
+	sem chan *indexer
 	wg  sync.WaitGroup
 
 	errOnce sync.Once
@@ -285,14 +290,14 @@ type deltaCrawler struct {
 func newDeltaCrawler(f io.ReaderAt, base *baseIndex) *deltaCrawler {
 	c := &deltaCrawler{
 		f:                f,
-		sem:              make(chan *undeltifier, 2),
+		sem:              make(chan *indexer, 2),
 		newIndex:         new(Index),
 		childrenByOffset: base.childrenByOffset,
 		childrenByID:     base.childrenByID,
 	}
 	*c.newIndex = *base.Index
 	for i := 0; i < cap(c.sem); i++ {
-		c.sem <- new(undeltifier)
+		c.sem <- new(indexer)
 	}
 	return c
 }
@@ -306,21 +311,21 @@ func (c *deltaCrawler) startCrawl(typ object.Type, baseObject io.ReadSeeker, obj
 }
 
 // crawl indexes a deltified object and its descendants.
-func (c *deltaCrawler) crawl(u *undeltifier, typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) {
+func (c *deltaCrawler) crawl(idxr *indexer, typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) {
 	defer c.wg.Done()
-	parent, children, err := c.process(u, typ, baseObject, obj)
+	parent, children, err := c.process(idxr, typ, baseObject, obj)
 	if err != nil {
-		c.sem <- u // release
+		c.sem <- idxr // release
 		c.errOnce.Do(func() { c.err = err })
 		return
 	}
 	if len(children) == 0 {
-		c.sem <- u // release
+		c.sem <- idxr // release
 		return
 	}
 	// The first child inherits the acquired undeltifier.
 	c.wg.Add(1)
-	go c.crawl(u, typ, bytes.NewReader(parent), children[0])
+	go c.crawl(idxr, typ, bytes.NewReader(parent), children[0])
 	// Subsequent children must acquire undeltifiers from the semaphore.
 	// Each baseObject bytes.Reader must be separate to avoid races.
 	for _, child := range children[1:] {
@@ -330,12 +335,12 @@ func (c *deltaCrawler) crawl(u *undeltifier, typ object.Type, baseObject io.Read
 
 // process processes a single deltified object and returns the location of any
 // new deltified objects that can be processed as a result.
-func (c *deltaCrawler) process(u *undeltifier, typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) ([]byte, []*deltaObject, error) {
+func (c *deltaCrawler) process(idxr *indexer, typ object.Type, baseObject io.ReadSeeker, obj *deltaObject) ([]byte, []*deltaObject, error) {
 	deltaPackObject := make([]byte, obj.sectionSize)
 	if _, err := c.f.ReadAt(deltaPackObject, obj.offset); err != nil {
 		return nil, nil, err
 	}
-	id, data, err := u.undeltify(typ, baseObject, bytes.NewReader(deltaPackObject))
+	id, data, err := idxr.undeltify(typ, baseObject, bytes.NewReader(deltaPackObject))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -362,25 +367,29 @@ func (c *deltaCrawler) wait() error {
 	return c.err
 }
 
-// An undeltifier decompresses deltified objects. The zero value is a valid
-// undeltifier.
+// An indexer decompresses deltified objects and computes their IDs.
+// The zero value is a valid indexer.
 //
-// The fields of undeltifier are expensive to create in a tight loop. Reusing
-// an undeltifier reduces memory allocations.
-type undeltifier struct {
+// indexer is distinct from Undeltifier because it creates new byte buffers for
+// each undeltification. This is crucial for index-building because it permits
+// concurrent reads of these buffers without synchronization.
+//
+// The fields of indexer are expensive to create in a tight loop. Reusing an
+// indexer reduces memory allocations.
+type indexer struct {
 	z    zlibReader
 	sha1 hash.Hash
 }
 
-func (u *undeltifier) undeltify(typ object.Type, baseObject io.ReadSeeker, deltaPackObject ByteReader) (githash.SHA1, []byte, error) {
+func (idxr *indexer) undeltify(typ object.Type, baseObject io.ReadSeeker, deltaPackObject ByteReader) (githash.SHA1, []byte, error) {
 	if _, err := ReadHeader(0, deltaPackObject); err != nil {
 		return githash.SHA1{}, nil, err
 	}
-	if err := setZlibReader(&u.z, deltaPackObject); err != nil {
+	if err := setZlibReader(&idxr.z, deltaPackObject); err != nil {
 		return githash.SHA1{}, nil, err
 	}
-	defer setZlibReader(&u.z, emptyReader{}) // don't retain deltaPackObject past function return
-	newObjectReader := NewDeltaReader(baseObject, bufio.NewReader(u.z))
+	defer setZlibReader(&idxr.z, emptyReader{}) // don't retain deltaPackObject past function return
+	newObjectReader := NewDeltaReader(baseObject, bufio.NewReader(idxr.z))
 	newSize, err := newObjectReader.Size()
 	if err != nil {
 		return githash.SHA1{}, nil, err
@@ -389,15 +398,15 @@ func (u *undeltifier) undeltify(typ object.Type, baseObject io.ReadSeeker, delta
 	if _, err := io.Copy(newObject, newObjectReader); err != nil {
 		return githash.SHA1{}, nil, err
 	}
-	if u.sha1 == nil {
-		u.sha1 = sha1.New()
+	if idxr.sha1 == nil {
+		idxr.sha1 = sha1.New()
 	} else {
-		u.sha1.Reset()
+		idxr.sha1.Reset()
 	}
-	u.sha1.Write(object.AppendPrefix(nil, typ, int64(newObject.Len())))
-	u.sha1.Write(newObject.Bytes())
+	idxr.sha1.Write(object.AppendPrefix(nil, typ, int64(newObject.Len())))
+	idxr.sha1.Write(newObject.Bytes())
 	var sumSHA1 githash.SHA1
-	u.sha1.Sum(sumSHA1[:0])
+	idxr.sha1.Sum(sumSHA1[:0])
 	return sumSHA1, newObject.Bytes(), nil
 }
 

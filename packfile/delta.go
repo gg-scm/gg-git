@@ -17,10 +17,15 @@
 package packfile
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"io"
 	"io/ioutil"
+
+	"gg-scm.io/pkg/git/object"
 )
 
 // DeltaReader decompresses a deltified object from a packfile.
@@ -224,4 +229,225 @@ func copyN(dst io.Writer, src io.Reader, n int64) error {
 		err = io.ErrUnexpectedEOF
 	}
 	return err
+}
+
+// ResolveType determines the type of the object located at the given offset.
+// If the object is a deltified, then it follows the delta base object
+// references until it encounters a non-delta object and returns its type.
+func ResolveType(f ByteReadSeeker, offset int64, opts *UndeltifyOptions) (object.Type, error) {
+	hdr, _, err := walkDeltaChain(f, offset, opts)
+	if err != nil {
+		return "", fmt.Errorf("packfile: resolve type at %d: %w", offset, err)
+	}
+	return hdr.Type.NonDelta(), nil
+}
+
+// An Undeltifier decompresses deltified objects in a packfile. The zero value
+// is a valid Undeltifier. Undeltifiers have cached internal state, so
+// Undeltifiers should be reused instead of created as needed.
+//
+// For more information on deltification, see
+// https://git-scm.com/docs/pack-format#_deltified_representation
+type Undeltifier struct {
+	z    zlibReader
+	zr   *bufio.Reader
+	sha1 hash.Hash
+
+	baseBuf    *bytes.Buffer
+	baseReader bytes.Reader
+	targetBuf  *bytes.Buffer
+}
+
+// UndeltifyOptions contains optional parameters for processing deltified
+// objects.
+type UndeltifyOptions struct {
+	// Index allows the undeltify operation to resolve delta object base ID
+	// references within the same packfile.
+	Index *Index
+}
+
+// Undeltify decompresses the object at the given offset from the beginning of
+// the packfile, undeltifying the object if needed. The returned io.Reader
+// may read from f, so the caller should not use f until they are done reading
+// from the returned io.Reader.
+func (u *Undeltifier) Undeltify(f ByteReadSeeker, offset int64, opts *UndeltifyOptions) (object.Type, io.Reader, error) {
+	hdr, deltaBodyStack, err := walkDeltaChain(f, offset, opts)
+	if err != nil {
+		return "", nil, fmt.Errorf("packfile: %w", err)
+	}
+
+	// We've found the root of the delta chain. Read it into memory.
+	if err := setZlibReader(&u.z, f); err != nil {
+		return "", nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: %w", hdr.Type, offset, hdr.Offset, err)
+	}
+	typ := hdr.Type.NonDelta()
+	if len(deltaBodyStack) == 0 {
+		// The originally requested object was not deltified. As an optimization,
+		// skip copying it into memory and return the stream directly.
+		return typ, u.z, nil
+	}
+	if hdr.Size > maxDeltaObjectSize {
+		return "", nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: object too large (%d bytes)", hdr.Type, offset, hdr.Offset, hdr.Size)
+	}
+	if u.baseBuf == nil {
+		u.baseBuf = bytes.NewBuffer(make([]byte, 0, int(hdr.Size)))
+	} else {
+		u.baseBuf.Reset()
+		u.baseBuf.Grow(int(hdr.Size))
+	}
+	if _, err := io.Copy(u.baseBuf, u.z); err != nil {
+		return "", nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: %w", hdr.Type, offset, hdr.Offset, err)
+	}
+	for len(deltaBodyStack) > 0 {
+		deltaBodyStart := deltaBodyStack[len(deltaBodyStack)-1]
+		deltaBodyStack = deltaBodyStack[:len(deltaBodyStack)-1]
+		if _, err := f.Seek(deltaBodyStart, io.SeekStart); err != nil {
+			return "", nil, fmt.Errorf("packfile: undeltify %v at %d: %w", hdr.Type, offset, err)
+		}
+		if err := u.undeltify(typ, f); err != nil {
+			return "", nil, fmt.Errorf("packfile: undeltify %v at %d: %w", hdr.Type, offset, err)
+		}
+		u.baseBuf, u.targetBuf = u.targetBuf, u.baseBuf
+	}
+	u.baseReader.Reset(u.baseBuf.Bytes())
+	return typ, &u.baseReader, nil
+}
+
+// walkDeltaChain follows the delta base object references until it encounters
+// a non-delta object. On success, it returns the non-delta header and the
+// positions of the delta zlib-compressed payloads in reverse order, and f's
+// read position will be at the start of the zlib-compressed data of the
+// base object.
+func walkDeltaChain(f ByteReadSeeker, offset int64, opts *UndeltifyOptions) (*Header, []int64, error) {
+	if opts == nil {
+		opts = new(UndeltifyOptions)
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, nil, fmt.Errorf("undeltify object at %d: %w", offset, err)
+	}
+	brc := &byteReaderCounter{r: f}
+	hdr, err := readObjectHeader(offset, brc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("undeltify object at %d: %w", offset, err)
+	}
+	var deltaBodyStack []int64
+	for hdr.Type.NonDelta() == "" {
+		deltaBodyStack = append(deltaBodyStack, hdr.Offset+brc.n)
+		baseOffset := hdr.BaseOffset
+		if hdr.Type == RefDelta {
+			i := opts.Index.FindID(hdr.BaseObject)
+			if i == -1 {
+				return nil, nil, fmt.Errorf("undeltify object at %d: could not find %v in index", hdr.Offset, hdr.BaseObject)
+			}
+			baseOffset = opts.Index.Offsets[i]
+		}
+		if _, err := f.Seek(baseOffset, io.SeekStart); err != nil {
+			return nil, nil, fmt.Errorf("undeltify object at %d: %w", hdr.Offset, err)
+		}
+		brc.n = 0
+		hdr, err = readObjectHeader(baseOffset, brc)
+		if err != nil {
+			return nil, nil, fmt.Errorf("undeltify object at %d: %w", hdr.Offset, err)
+		}
+	}
+	return hdr, deltaBodyStack, nil
+}
+
+// undeltify runs the zlib-compressed delta instructions in compressStream on
+// u.baseBuf and writes to u.targetBuf.
+func (u *Undeltifier) undeltify(typ object.Type, compressStream ByteReader) error {
+	if err := setZlibReader(&u.z, compressStream); err != nil {
+		return err
+	}
+	defer setZlibReader(&u.z, emptyReader{}) // don't retain deltaPackObject past function return
+	u.baseReader.Reset(u.baseBuf.Bytes())
+	if u.zr == nil {
+		u.zr = bufio.NewReader(u.z)
+	} else {
+		u.zr.Reset(u.z)
+	}
+	newObjectReader := NewDeltaReader(&u.baseReader, u.zr)
+	newSize, err := newObjectReader.Size()
+	if err != nil {
+		return err
+	}
+	if u.targetBuf == nil {
+		u.targetBuf = bytes.NewBuffer(make([]byte, 0, int(newSize)))
+	} else {
+		u.targetBuf.Reset()
+		u.targetBuf.Grow(int(newSize))
+	}
+	if _, err := io.Copy(u.targetBuf, newObjectReader); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ByteReadSeeker is the interface that groups the io.Reader, io.ByteReader,
+// and io.Seeker interfaces.
+type ByteReadSeeker interface {
+	io.Reader
+	io.ByteReader
+	io.Seeker
+}
+
+// BufferedReadSeeker implements buffering for an io.ReadSeeker object.
+type BufferedReadSeeker struct {
+	r io.ReadSeeker
+	b *bufio.Reader
+}
+
+// NewBufferedReadSeeker returns a new BufferedReadSeeker whose buffer has the
+// default size.
+func NewBufferedReadSeeker(r io.ReadSeeker) *BufferedReadSeeker {
+	return NewBufferedReadSeekerSize(r, 4096)
+}
+
+// NewBufferedReadSeekerSize returns a new BufferedReadSeeker whose buffer has
+// at least the specified size.
+func NewBufferedReadSeekerSize(r io.ReadSeeker, size int) *BufferedReadSeeker {
+	return &BufferedReadSeeker{
+		r: r,
+		b: bufio.NewReaderSize(r, size),
+	}
+}
+
+// Read reads data into p. The bytes are taken from at most one Read on the
+// underlying Reader, hence n may be less than len(p). To read exactly len(p)
+// bytes, use io.ReadFull(b, p). At EOF, the count will be zero and err will be
+// io.EOF.
+func (rs *BufferedReadSeeker) Read(p []byte) (int, error) {
+	return rs.b.Read(p)
+}
+
+// ReadByte reads and returns a single byte. If no byte is available, returns an
+// error.
+func (rs *BufferedReadSeeker) ReadByte() (byte, error) {
+	return rs.b.ReadByte()
+}
+
+// Seek implements the io.Seeker interface.
+func (rs *BufferedReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekCurrent {
+		if 0 <= offset && offset <= int64(rs.b.Buffered()) {
+			// Optimization: if we move forward by less bytes than buffered, just
+			// discard bytes from the buffer.
+			currPos, err := rs.r.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return 0, err
+			}
+			rs.b.Discard(int(offset))
+			return currPos - int64(rs.b.Buffered()), nil
+		}
+		// We've already read rs.b.Buffered() bytes beyond what we're surfacing to
+		// the caller, so we need to correct the offset before sending it to the
+		// underlying Seek.
+		offset -= int64(rs.b.Buffered())
+	}
+	newPos, err := rs.r.Seek(offset, whence)
+	if err != nil {
+		return 0, err
+	}
+	rs.b.Reset(rs.r)
+	return newPos, nil
 }
