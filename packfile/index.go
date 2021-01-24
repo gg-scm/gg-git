@@ -40,7 +40,8 @@ head room.
 */
 
 // Index is an in-memory mapping of object IDs to offsets within a packfile.
-// This maps 1:1 with index files produced by git-index-pack(1).
+// This maps 1:1 with index files produced by git-index-pack(1). (*Index)(nil)
+// is treated the same as the Index for an empty packfile.
 type Index struct {
 	// ObjectIDs is a sorted list of object IDs in the packfile.
 	ObjectIDs []githash.SHA1
@@ -234,6 +235,9 @@ func readFull(r io.Reader, buf []byte) (int, error) {
 
 // EncodeV2 writes idx in Git's packfile index version 2 format.
 func (idx *Index) EncodeV2(w io.Writer) error {
+	if idx == nil {
+		idx = &Index{PackfileSHA1: emptyPackfileSHA1()}
+	}
 	if err := idx.validate(); err != nil {
 		return fmt.Errorf("write packfile index: %w", err)
 	}
@@ -299,6 +303,9 @@ func (idx *Index) EncodeV2(w io.Writer) error {
 // should only be used for compatibility, since the version 1 format does not
 // store PackedChecksums and do not support packfiles larger than 4 GiB.
 func (idx *Index) EncodeV1(w io.Writer) error {
+	if idx == nil {
+		idx = &Index{PackfileSHA1: emptyPackfileSHA1()}
+	}
 	if err := idx.validate(); err != nil {
 		return fmt.Errorf("write packfile index: %w", err)
 	}
@@ -370,6 +377,17 @@ func (idx *Index) encodeFanOut(w io.Writer) error {
 	return nil
 }
 
+func emptyPackfileSHA1() githash.SHA1 {
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf, 0)
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+	var sum githash.SHA1
+	copy(sum[:], buf.Bytes()[buf.Len()-githash.SHA1Size:])
+	return sum
+}
+
 // MarshalBinary encodes the index in Git's packfile index version 2 format.
 func (idx *Index) MarshalBinary() ([]byte, error) {
 	buf := new(bytes.Buffer)
@@ -383,6 +401,9 @@ func (idx *Index) MarshalBinary() ([]byte, error) {
 // present in the index. The result is undefined if idx.ObjectIDs is not sorted.
 // This search is O(log len(idx.ObjectIDs)).
 func (idx *Index) FindID(id githash.SHA1) int {
+	if idx == nil {
+		return -1
+	}
 	i := sort.Search(len(idx.ObjectIDs), func(i int) bool {
 		return bytes.Compare(idx.ObjectIDs[i][:], id[:]) >= 0
 	})
@@ -394,6 +415,9 @@ func (idx *Index) FindID(id githash.SHA1) int {
 
 // Len returns the number of objects in the index.
 func (idx *Index) Len() int {
+	if idx == nil {
+		return 0
+	}
 	return len(idx.ObjectIDs)
 }
 

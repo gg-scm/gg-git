@@ -124,13 +124,27 @@ func TestIndexEncodeV1(t *testing.T) {
 			}
 			got := new(bytes.Buffer)
 			if err := test.wantIndex.EncodeV1(got); err != nil {
-				t.Error("ReadIndex:", err)
+				t.Error("EncodeV1:", err)
 			}
 			if diff := cmp.Diff(want, got.Bytes()); diff != "" {
 				t.Errorf("index (-want +got):\n%s", diff)
 			}
 		})
 	}
+
+	t.Run("Nil", func(t *testing.T) {
+		want, err := ioutil.ReadFile(filepath.Join("testdata", "Empty.idx1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := new(bytes.Buffer)
+		if err := (*Index)(nil).EncodeV1(got); err != nil {
+			t.Error("EncodeV1:", err)
+		}
+		if diff := cmp.Diff(want, got.Bytes()); diff != "" {
+			t.Errorf("index (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestIndexEncodeV2(t *testing.T) {
@@ -145,7 +159,7 @@ func TestIndexEncodeV2(t *testing.T) {
 			}
 			got := new(bytes.Buffer)
 			if err := test.wantIndex.EncodeV2(got); err != nil {
-				t.Error("ReadIndex:", err)
+				t.Error("EncodeV2:", err)
 			}
 			if diff := cmp.Diff(want, got.Bytes()); diff != "" {
 				t.Errorf("index (-want +got):\n%s", diff)
@@ -160,7 +174,21 @@ func TestIndexEncodeV2(t *testing.T) {
 		}
 		got := new(bytes.Buffer)
 		if err := bigOffsetIndex.EncodeV2(got); err != nil {
-			t.Error("ReadIndex:", err)
+			t.Error("EncodeV2:", err)
+		}
+		if diff := cmp.Diff(want, got.Bytes()); diff != "" {
+			t.Errorf("index (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Nil", func(t *testing.T) {
+		want, err := ioutil.ReadFile(filepath.Join("testdata", "Empty.idx2"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := new(bytes.Buffer)
+		if err := (*Index)(nil).EncodeV2(got); err != nil {
+			t.Error("EncodeV2:", err)
 		}
 		if diff := cmp.Diff(want, got.Bytes()); diff != "" {
 			t.Errorf("index (-want +got):\n%s", diff)
