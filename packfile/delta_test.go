@@ -228,14 +228,17 @@ func TestUndeltifier(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotType, gotReader, err := new(Undeltifier).Undeltify(bytes.NewReader(buf.Bytes()), offset, &UndeltifyOptions{
+			gotPrefix, gotReader, err := new(Undeltifier).Undeltify(bytes.NewReader(buf.Bytes()), offset, &UndeltifyOptions{
 				Index: idx,
 			})
 			if err != nil {
 				t.Fatal("Undeltify:", err)
 			}
-			if gotType != wantType {
-				t.Errorf("type = %q; want %q", gotType, wantType)
+			if gotPrefix.Type != wantType {
+				t.Errorf("prefix.Type = %q; want %q", gotPrefix.Type, wantType)
+			}
+			if gotPrefix.Size != int64(len(wantData)) {
+				t.Errorf("prefix.Size = %d; want %d", gotPrefix.Size, len(wantData))
 			}
 			got := new(bytes.Buffer)
 			if _, err := io.Copy(got, gotReader); err != nil {

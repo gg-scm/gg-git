@@ -270,24 +270,24 @@ type UndeltifyOptions struct {
 // the packfile, undeltifying the object if needed. The returned io.Reader
 // may read from f, so the caller should not use f until they are done reading
 // from the returned io.Reader.
-func (u *Undeltifier) Undeltify(f ByteReadSeeker, offset int64, opts *UndeltifyOptions) (object.Type, io.Reader, error) {
+func (u *Undeltifier) Undeltify(f ByteReadSeeker, offset int64, opts *UndeltifyOptions) (object.Prefix, io.Reader, error) {
 	hdr, deltaBodyStack, err := walkDeltaChain(f, offset, opts)
 	if err != nil {
-		return "", nil, fmt.Errorf("packfile: %w", err)
+		return object.Prefix{}, nil, fmt.Errorf("packfile: %w", err)
 	}
 
 	// We've found the root of the delta chain. Read it into memory.
 	if err := setZlibReader(&u.z, f); err != nil {
-		return "", nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: %w", hdr.Type, offset, hdr.Offset, err)
+		return object.Prefix{}, nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: %w", hdr.Type, offset, hdr.Offset, err)
 	}
 	typ := hdr.Type.NonDelta()
 	if len(deltaBodyStack) == 0 {
 		// The originally requested object was not deltified. As an optimization,
 		// skip copying it into memory and return the stream directly.
-		return typ, u.z, nil
+		return object.Prefix{Type: typ, Size: hdr.Size}, u.z, nil
 	}
 	if hdr.Size > maxDeltaObjectSize {
-		return "", nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: object too large (%d bytes)", hdr.Type, offset, hdr.Offset, hdr.Size)
+		return object.Prefix{}, nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: object too large (%d bytes)", hdr.Type, offset, hdr.Offset, hdr.Size)
 	}
 	if u.baseBuf == nil {
 		u.baseBuf = bytes.NewBuffer(make([]byte, 0, int(hdr.Size)))
@@ -296,21 +296,21 @@ func (u *Undeltifier) Undeltify(f ByteReadSeeker, offset int64, opts *UndeltifyO
 		u.baseBuf.Grow(int(hdr.Size))
 	}
 	if _, err := io.Copy(u.baseBuf, u.z); err != nil {
-		return "", nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: %w", hdr.Type, offset, hdr.Offset, err)
+		return object.Prefix{}, nil, fmt.Errorf("packfile: undeltify %v at %d: read base at %d: %w", hdr.Type, offset, hdr.Offset, err)
 	}
 	for len(deltaBodyStack) > 0 {
 		deltaBodyStart := deltaBodyStack[len(deltaBodyStack)-1]
 		deltaBodyStack = deltaBodyStack[:len(deltaBodyStack)-1]
 		if _, err := f.Seek(deltaBodyStart, io.SeekStart); err != nil {
-			return "", nil, fmt.Errorf("packfile: undeltify %v at %d: %w", hdr.Type, offset, err)
+			return object.Prefix{}, nil, fmt.Errorf("packfile: undeltify %v at %d: %w", hdr.Type, offset, err)
 		}
 		if err := u.undeltify(typ, f); err != nil {
-			return "", nil, fmt.Errorf("packfile: undeltify %v at %d: %w", hdr.Type, offset, err)
+			return object.Prefix{}, nil, fmt.Errorf("packfile: undeltify %v at %d: %w", hdr.Type, offset, err)
 		}
 		u.baseBuf, u.targetBuf = u.targetBuf, u.baseBuf
 	}
 	u.baseReader.Reset(u.baseBuf.Bytes())
-	return typ, &u.baseReader, nil
+	return object.Prefix{Type: typ, Size: u.baseReader.Size()}, &u.baseReader, nil
 }
 
 // walkDeltaChain follows the delta base object references until it encounters
