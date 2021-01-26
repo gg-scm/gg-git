@@ -276,8 +276,8 @@ func (typ ObjectType) isValid() bool {
 
 // NonDelta returns the Git object type that the packfile object type represents
 // or the empty string if the type represents a deltified object.
-func (t ObjectType) NonDelta() object.Type {
-	switch t {
+func (typ ObjectType) NonDelta() object.Type {
+	switch typ {
 	case Commit:
 		return object.TypeCommit
 	case Tree:
