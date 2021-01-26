@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"hash"
 	"io"
 	"io/ioutil"
 
@@ -249,9 +248,8 @@ func ResolveType(f ByteReadSeeker, offset int64, opts *UndeltifyOptions) (object
 // For more information on deltification, see
 // https://git-scm.com/docs/pack-format#_deltified_representation
 type Undeltifier struct {
-	z    zlibReader
-	zr   *bufio.Reader
-	sha1 hash.Hash
+	z  zlibReader
+	zr *bufio.Reader
 
 	baseBuf    *bytes.Buffer
 	baseReader bytes.Reader
