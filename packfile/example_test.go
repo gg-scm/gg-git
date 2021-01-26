@@ -18,14 +18,63 @@ package packfile_test
 
 import (
 	"bufio"
+	"bytes"
 	"compress/zlib"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
+	"gg-scm.io/pkg/git/githash"
+	"gg-scm.io/pkg/git/object"
 	"gg-scm.io/pkg/git/packfile"
 )
+
+func Example() {
+	// Open a packfile.
+	file, err := os.Open(filepath.Join("testdata", "DeltaObject.pack"))
+	if err != nil {
+		// handle error
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		// handle error
+	}
+
+	// Index the packfile.
+	idx, err := packfile.BuildIndex(file, fileInfo.Size(), nil)
+	if err != nil {
+		// handle error
+	}
+
+	// Find the position of an object.
+	commitID, err := githash.ParseSHA1("45c3b785642598057cf65b79fd05586dae5cba10")
+	if err != nil {
+		// handle error
+	}
+	i := idx.FindID(commitID)
+	if i == -1 {
+		// handle not-found error
+	}
+
+	// Read the object from the packfile.
+	undeltifier := new(packfile.Undeltifier)
+	bufferedFile := packfile.NewBufferedReadSeeker(file)
+	prefix, content, err := undeltifier.Undeltify(bufferedFile, idx.Offsets[i], &packfile.UndeltifyOptions{
+		Index: idx,
+	})
+	if err != nil {
+		// handle error
+	}
+	fmt.Println(prefix)
+	io.Copy(os.Stdout, content)
+
+	// Output:
+	// blob 13
+	// Hello, delta
+}
 
 // This example uses ReadHeader to perform random access in a packfile.
 func ExampleReadHeader() {
@@ -60,4 +109,106 @@ func ExampleReadHeader() {
 	// Output:
 	// OBJ_BLOB
 	// Hello, World!
+}
+
+func ExampleIndex() {
+	// Open a packfile.
+	file, err := os.Open(filepath.Join("testdata", "FirstCommit.pack"))
+	if err != nil {
+		// handle error
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		// handle error
+	}
+
+	// Index the packfile.
+	idx, err := packfile.BuildIndex(file, fileInfo.Size(), nil)
+	if err != nil {
+		// handle error
+	}
+
+	// Print a sorted list of all objects in the packfile.
+	for _, id := range idx.ObjectIDs {
+		fmt.Println(id)
+	}
+
+	// Output:
+	// 8ab686eafeb1f44702738c8b0f24f2567c36da6d
+	// aef8a4c3fe8d296dec2d9b88d4654cd596927867
+	// bc225ea23f53f06c0c5bd3ba2be85c2120d68417
+}
+
+func ExampleWriter() {
+	// Create a writer.
+	buf := new(bytes.Buffer)
+	const objectCount = 3
+	writer := packfile.NewWriter(buf, objectCount)
+
+	// Write a blob.
+	const blobContent = "Hello, World!\n"
+	_, err := writer.WriteHeader(&packfile.Header{
+		Type: packfile.Blob,
+		Size: int64(len(blobContent)),
+	})
+	if err != nil {
+		// handle error
+	}
+	if _, err := io.WriteString(writer, blobContent); err != nil {
+		// handle error
+	}
+	blobSum, err := object.BlobSum(strings.NewReader(blobContent), int64(len(blobContent)))
+	if err != nil {
+		// handle error
+	}
+
+	// Write a tree (directory).
+	tree := object.Tree{
+		{Name: "hello.txt", Mode: object.ModePlain, ObjectID: blobSum},
+	}
+	treeData, err := tree.MarshalBinary()
+	if err != nil {
+		// handle error
+	}
+	_, err = writer.WriteHeader(&packfile.Header{
+		Type: packfile.Tree,
+		Size: int64(len(treeData)),
+	})
+	if err != nil {
+		// handle error
+	}
+	if _, err := writer.Write(treeData); err != nil {
+		// handle error
+	}
+
+	// Write a commit.
+	const user object.User = "Octocat <octocat@example.com>"
+	commitTime := time.Unix(1608391559, 0).In(time.FixedZone("-0800", -8*60*60))
+	commit := &object.Commit{
+		Tree:       tree.SHA1(),
+		Author:     user,
+		AuthorTime: commitTime,
+		Committer:  user,
+		CommitTime: commitTime,
+		Message:    "First commit\n",
+	}
+	commitData, err := commit.MarshalBinary()
+	if err != nil {
+		// handle error
+	}
+	_, err = writer.WriteHeader(&packfile.Header{
+		Type: packfile.Commit,
+		Size: int64(len(commitData)),
+	})
+	if err != nil {
+		// handle error
+	}
+	if _, err := writer.Write(commitData); err != nil {
+		// handle error
+	}
+
+	// Finish the write.
+	if err := writer.Close(); err != nil {
+		// handle error
+	}
 }
