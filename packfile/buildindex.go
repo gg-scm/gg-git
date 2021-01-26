@@ -32,9 +32,13 @@ import (
 	"gg-scm.io/pkg/git/object"
 )
 
+// IndexOptions holds optional arguments to BuildIndex.
+type IndexOptions struct {
+}
+
 // BuildIndex indexes a packfile. This is equivalent to running git-index-pack(1)
 // on the packfile.
-func BuildIndex(f io.ReaderAt, fileSize int64) (*Index, error) {
+func BuildIndex(f io.ReaderAt, fileSize int64, opts *IndexOptions) (*Index, error) {
 	fileHash := sha1.New()
 	hashTee := &teeByteReader{
 		r: bufio.NewReader(io.NewSectionReader(f, 0, fileSize)),

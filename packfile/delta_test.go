@@ -224,7 +224,7 @@ func TestUndeltifier(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			idx, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			idx, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -257,7 +257,7 @@ func TestUndeltifier(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			idx, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			idx, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

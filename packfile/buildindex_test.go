@@ -40,7 +40,7 @@ func TestBuildIndex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := BuildIndex(f, info.Size())
+			got, err := BuildIndex(f, info.Size(), nil)
 			if err != nil {
 				t.Log("Error:", err)
 				if !test.wantError {
@@ -78,7 +78,7 @@ func BenchmarkBuildIndex(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	_, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	_, err := BuildIndex(bytes.NewReader(buf.Bytes()), int64(buf.Len()), nil)
 	if err != nil {
 		b.Fatal(err)
 	}
