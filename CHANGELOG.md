@@ -3,18 +3,20 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.8.1...main
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.9.0...main
 
-## [Unreleased][]
+## [0.9.0][] - 2021-01-26
+
+Version 0.9 adds a new package for interacting with remote Git repositories and
+expands the `packfile` package to handle random access.
+
+[0.9.0]: https://github.com/gg-scm/gg-git/releases/tag/v0.9.0
 
 ### Added
 
 -  A new `packfile/client` package enables downloading commits from and
    uploading commits to remote Git repositories.
    ([#7](https://github.com/gg-scm/gg-git/issues/7))
--  `*object.Commit` and `*object.Tag` now implement `BinaryMarshaler` and
-   `BinaryUnmarshaler` in addition to `TextMarshaler` and `TextUnmarshaler`.
-   This is for symmetry with `object.Tree`.
 -  The `packfile.DeltaReader` type is a flexible way of expanding a deltified
    object from a packfile.
 -  The `packfile.Undeltifier` type decompresses objects from packfiles.
@@ -22,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    interoperable with Git packfile index files.
    ([#12](https://github.com/gg-scm/gg-git/issues/12))
 -  `packfile.ReadHeader` enables random access to a packfile.
+-  `*object.Commit` and `*object.Tag` now implement `BinaryMarshaler` and
+   `BinaryUnmarshaler` in addition to `TextMarshaler` and `TextUnmarshaler`.
+   This is for symmetry with `object.Tree`.
 -  `object.Prefix` allows marshaling and unmarshaling the `"blob 42\x00"` prefix
    used as part of the Git object hash.
 -  The new `*Git.Clone` and `*Git.CloneBare` methods clone repositories.
