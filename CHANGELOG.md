@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -  `packfile.ReadHeader` enables random access to a packfile.
 -  `object.Prefix` allows marshaling and unmarshaling the `"blob 42\x00"` prefix
    used as part of the Git object hash.
+-  The new `*Git.Clone` and `*Git.CloneBare` methods clone repositories.
 -  `git.URLFromPath` converts a filesystem path into a URL.
 
 ### Changed

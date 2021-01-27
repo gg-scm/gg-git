@@ -17,11 +17,95 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"gg-scm.io/pkg/git/internal/giturl"
 )
+
+// CloneOptions specifies the command-line options for `git clone`.
+type CloneOptions struct {
+	// Dir is the path to a directory to clone into. If empty, the final path
+	// component of the URL is used, removing any ".git" suffix.
+	Dir string
+
+	// Progress receives the stderr of the `git clone` subprocess if not nil.
+	Progress io.Writer
+
+	// HeadBranch sets the branch that the new repository's HEAD will point to.
+	// If empty, uses the same HEAD as the remote repository.
+	HeadBranch string
+	// RemoteName sets the name of the new remote. Defaults to "origin" if empty.
+	RemoteName string
+
+	// If Depth is greater than zero, it limits the depth of the commits cloned.
+	// It is mutually exclusive with Since.
+	Depth int
+	// Since requests that the shallow clone should be cut at a specific time.
+	// It is mutually exclusive with Depth.
+	Since time.Time
+	// ShallowExclude is a set of revisions that the remote will exclude from
+	// the packfile. Unlike Have, the remote will send any needed trees and
+	// blobs even if they are shared with the revisions in ShallowExclude.
+	// It is mutually exclusive with Depth, but not Since. This is only supported
+	// by the remote if it has PullCapShallowExclude.
+	ShallowExclude []string
+}
+
+// Clone clones the repository at the given URL and checks out HEAD.
+func (g *Git) Clone(ctx context.Context, u *url.URL, opts CloneOptions) error {
+	if err := g.clone(ctx, "", u, opts); err != nil {
+		return fmt.Errorf("git clone %v: %w", u, err)
+	}
+	return nil
+}
+
+// CloneBare clones the repository at the given URL without creating a working copy.
+func (g *Git) CloneBare(ctx context.Context, u *url.URL, opts CloneOptions) error {
+	if err := g.clone(ctx, "--bare", u, opts); err != nil {
+		return fmt.Errorf("git clone --bare %v: %w", u, err)
+	}
+	return nil
+}
+
+func (g *Git) clone(ctx context.Context, mode string, u *url.URL, opts CloneOptions) error {
+	var args []string
+	args = append(args, "clone")
+	if opts.Progress == nil {
+		args = append(args, "--quiet")
+	} else {
+		args = append(args, "--progress")
+	}
+	if mode != "" {
+		args = append(args, mode)
+	}
+	if opts.HeadBranch != "" {
+		args = append(args, "--branch="+opts.HeadBranch)
+	}
+	if opts.RemoteName != "" {
+		args = append(args, "--origin="+opts.RemoteName)
+	}
+	if opts.Depth > 0 {
+		args = append(args, fmt.Sprintf("--depth=%d", opts.Depth))
+	}
+	if !opts.Since.IsZero() {
+		args = append(args, fmt.Sprintf("--shallow-since=%d", opts.Since.Unix()))
+	}
+	for _, rev := range opts.ShallowExclude {
+		args = append(args, "--shallow-exclude="+rev)
+	}
+	args = append(args, "--", u.String())
+	if opts.Dir != "" {
+		args = append(args, opts.Dir)
+	}
+	return g.runner.RunGit(ctx, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Stderr: opts.Progress,
+	})
+}
 
 // ListRemoteRefs lists all of the refs in a remote repository.
 // remote may be a URL or the name of a remote.
