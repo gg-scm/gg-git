@@ -29,6 +29,9 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/internal/giturl"
@@ -90,8 +93,15 @@ func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open remote %s: %w", urlstr, err)
 		}
+		var dir string
+		if runtime.GOOS == "windows" {
+			// Remove leading slash before volume name.
+			dir = filepath.FromSlash(strings.TrimPrefix(u.Path, "/"))
+		} else {
+			dir = filepath.FromSlash(u.Path)
+		}
 		remote.impl = &fileRemote{
-			dir:             u.Path,
+			dir:             dir,
 			uploadPackPath:  uploadPackPath,
 			receivePackPath: receivePackPath,
 		}

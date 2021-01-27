@@ -466,10 +466,7 @@ type transportVariant struct {
 func allTransportVariants(gitExe string) []transportVariant {
 	return []transportVariant{
 		{"Local", func(_ testing.TB, dir string) *url.URL {
-			return &url.URL{
-				Scheme: "file",
-				Path:   filepath.FromSlash(dir),
-			}
+			return URLFromPath(dir)
 		}},
 		{"HTTP", func(tb testing.TB, dir string) *url.URL {
 			httpServer := serveHTTPRepository(gitExe, dir)
