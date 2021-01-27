@@ -23,4 +23,4 @@ updates:
   reviewers:
     - zombiezen
   commit-message:
-    prefix: ".github/workflows:"
+    prefix: ".github:"
