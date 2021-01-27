@@ -126,3 +126,9 @@ func (pat RefPattern) Match(ref Ref) (suffix string, ok bool) {
 func ParseURL(urlstr string) (*url.URL, error) {
 	return giturl.Parse(urlstr)
 }
+
+// URLFromPath converts a filesystem path into a URL. If it's a relative path,
+// then it returns a path-only URL.
+func URLFromPath(path string) *url.URL {
+	return giturl.FromPath(path)
+}

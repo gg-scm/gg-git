@@ -19,6 +19,7 @@ package giturl
 import (
 	"errors"
 	"net/url"
+	"path/filepath"
 	"strings"
 )
 
@@ -36,4 +37,21 @@ func Parse(urlstr string) (*url.URL, error) {
 		}
 	}
 	return url.Parse(urlstr)
+}
+
+// FromPath converts a filesystem path into a URL. If it's a relative path, then
+// it returns a path-only URL.
+func FromPath(path string) *url.URL {
+	if !filepath.IsAbs(path) {
+		return &url.URL{Path: filepath.ToSlash(path)}
+	}
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		// For Windows paths that start with "C:/".
+		path = "/" + path
+	}
+	return &url.URL{
+		Scheme: "file",
+		Path:   path,
+	}
 }

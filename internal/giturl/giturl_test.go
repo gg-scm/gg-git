@@ -18,6 +18,7 @@ package giturl
 
 import (
 	"net/url"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -266,6 +267,56 @@ func TestParseURL(t *testing.T) {
 			}
 		} else if !equal {
 			t.Errorf("Parse(%q) = %v, %v; want %v, <nil>", test.urlstr, got, err, test.want)
+		}
+	}
+}
+
+func TestFromPathUnix(t *testing.T) {
+	if filepath.Separator != '/' {
+		t.Skipf("Path separator is %q, not '/'", filepath.Separator)
+	}
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"foo.txt", "foo.txt"},
+		{"../foo.txt", "../foo.txt"},
+		{"/foo/bar.txt", "file:///foo/bar.txt"},
+	}
+	for _, test := range tests {
+		want, err := url.Parse(test.want)
+		if err != nil {
+			t.Errorf("invalid want url: %v", err)
+			continue
+		}
+		got := FromPath(test.path)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("FromPath(%q) (-want +got):\n%s", test.path, diff)
+		}
+	}
+}
+
+func TestFromPathWindows(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skipf("Path separator is %q, not '\\'", filepath.Separator)
+	}
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"foo.txt", "foo.txt"},
+		{`..\foo.txt`, "../foo.txt"},
+		{`C:\foo\bar.txt`, "file:///C:/foo/bar.txt"},
+	}
+	for _, test := range tests {
+		want, err := url.Parse(test.want)
+		if err != nil {
+			t.Errorf("invalid want url: %v", err)
+			continue
+		}
+		got := FromPath(test.path)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("FromPath(%q) (-want +got):\n%s", test.path, diff)
 		}
 	}
 }
