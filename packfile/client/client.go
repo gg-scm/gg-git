@@ -74,6 +74,11 @@ func (opts *Options) httpUserAgent() string {
 
 // NewRemote returns a new Remote or returns an error if the transport specified
 // in the URL scheme is unsupported.
+//
+// The supported schemes are:
+//
+//   file: Local git-upload-pack/git-receive-pack subprocesses
+//   http/https: Smart Git HTTP protocol
 func NewRemote(u *url.URL, opts *Options) (*Remote, error) {
 	urlstr := u.Redacted()
 	remote := &Remote{
