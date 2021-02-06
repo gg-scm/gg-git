@@ -38,7 +38,7 @@ type PullStream struct {
 
 type puller interface {
 	negotiate(ctx context.Context, errPrefix string, req *PullRequest) (*PullResponse, error)
-	listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error)
+	listRefs(ctx context.Context, refPrefixes []string) (map[githash.Ref]*Ref, error)
 	capabilities() PullCapabilities
 	Close() error
 }
@@ -91,7 +91,7 @@ type Ref struct {
 //
 // If you need to call both ListRefs and Negotiate on a stream, you should call
 // ListRefs first. Older Git servers send their refs upfront
-func (p *PullStream) ListRefs(refPrefixes ...string) ([]*Ref, error) {
+func (p *PullStream) ListRefs(refPrefixes ...string) (map[githash.Ref]*Ref, error) {
 	refs, err := p.impl.listRefs(p.ctx, refPrefixes)
 	if err != nil {
 		return nil, fmt.Errorf("list refs for %s: %w", p.urlstr, err)

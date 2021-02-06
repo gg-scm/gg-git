@@ -135,13 +135,7 @@ func ExamplePullStream_singleRef() {
 	if err != nil {
 		// handle error
 	}
-	var headRef *client.Ref
-	for _, r := range refs {
-		if r.Name == githash.Head {
-			headRef = r
-			break
-		}
-	}
+	headRef := refs[githash.Head]
 	if headRef == nil {
 		fmt.Fprintln(os.Stderr, "No HEAD found!")
 		return
@@ -275,14 +269,7 @@ func ExamplePushStream() {
 	// You should check that the ref is currently pointing to an ancestor of the
 	// commit you want to push to that ref. Otherwise, you are performing a
 	// force push.
-	mainRef := githash.BranchRef("main")
-	var curr *client.Ref
-	for _, r := range stream.Refs() {
-		if r.Name == mainRef {
-			curr = r
-			break
-		}
-	}
+	curr := stream.Refs()[githash.BranchRef("main")]
 	if curr == nil {
 		fmt.Fprintln(os.Stderr, "main branch not found!")
 		return
@@ -304,7 +291,7 @@ func ExamplePushStream() {
 
 	// Start the push. First inform the remote of refs that we intend to change.
 	err = stream.WriteCommands(&client.PushCommand{
-		RefName: mainRef,
+		RefName: curr.Name,
 		Old:     curr.ObjectID,
 		New:     newCommit.SHA1(),
 	})

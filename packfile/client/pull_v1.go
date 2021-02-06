@@ -56,7 +56,7 @@ type pullV1 struct {
 	refsReader *pktline.Reader
 	refsCloser io.Closer
 
-	refs      []*Ref
+	refs      map[githash.Ref]*Ref
 	refsError error
 }
 
@@ -70,7 +70,7 @@ func newPullV1(impl impl, refsReader *pktline.Reader, refsCloser io.Closer) *pul
 		refsCloser.Close()
 		return p
 	}
-	p.refs = []*Ref{ref0}
+	p.refs = map[githash.Ref]*Ref{ref0.Name: ref0}
 	p.refsReader = refsReader
 	p.refsCloser = refsCloser
 	return p
@@ -83,22 +83,25 @@ func (p *pullV1) Close() error {
 	return nil
 }
 
-func (p *pullV1) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
+func (p *pullV1) listRefs(ctx context.Context, refPrefixes []string) (map[githash.Ref]*Ref, error) {
 	if p.refsReader != nil {
-		p.refs, p.refsError = readOtherRefsV1(p.refs, p.caps.symrefs(), p.refsReader)
+		p.refsError = readOtherRefsV1(p.refs, p.caps.symrefs(), p.refsReader)
 		p.refsCloser.Close()
 		p.refsReader = nil
 		p.refsCloser = nil
 	}
+	refs := make(map[githash.Ref]*Ref, len(p.refs))
 	if len(refPrefixes) == 0 {
-		return append([]*Ref(nil), p.refs...), p.refsError
+		for k, v := range p.refs {
+			refs[k] = v
+		}
+		return refs, p.refsError
 	}
 	// Filter by given prefixes.
-	refs := make([]*Ref, 0, len(p.refs))
 	for _, r := range p.refs {
 		for _, prefix := range refPrefixes {
 			if strings.HasPrefix(string(r.Name), prefix) {
-				refs = append(refs, r)
+				refs[r.Name] = r
 			}
 		}
 	}
@@ -184,23 +187,23 @@ func parseFirstRefV1(line []byte) (*Ref, capabilityList, error) {
 // readOtherRefsV1 parses the second and subsequent refs in the version 1 refs
 // advertisement response. The caller is expected to have advanced r past the
 // first ref before calling readOtherRefsV1.
-func readOtherRefsV1(refs []*Ref, symrefs map[githash.Ref]githash.Ref, r *pktline.Reader) ([]*Ref, error) {
+func readOtherRefsV1(refs map[githash.Ref]*Ref, symrefs map[githash.Ref]githash.Ref, r *pktline.Reader) error {
 	for r.Next() && r.Type() != pktline.Flush {
 		line, err := r.Text()
 		if err != nil {
-			return nil, fmt.Errorf("read refs: %w", err)
+			return fmt.Errorf("read refs: %w", err)
 		}
 		ref, err := parseOtherRefV1(line)
 		if err != nil {
-			return nil, fmt.Errorf("read refs: %w", err)
+			return fmt.Errorf("read refs: %w", err)
 		}
 		ref.SymrefTarget = symrefs[ref.Name]
-		refs = append(refs, ref)
+		refs[ref.Name] = ref
 	}
 	if err := r.Err(); err != nil {
-		return refs, fmt.Errorf("read refs: %w", err)
+		return fmt.Errorf("read refs: %w", err)
 	}
-	return refs, nil
+	return nil
 }
 
 func parseOtherRefV1(line []byte) (*Ref, error) {

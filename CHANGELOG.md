@@ -5,6 +5,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.9.0...main
 
+## [Unreleased][]
+
+### Changed
+
+-  `*client.PullStream.ListRefs` and `*client.PushStream.Refs` now return a map
+   of refs instead of a slice.
+
 ## [0.9.0][] - 2021-01-26
 
 Version 0.9 adds a new package for interacting with remote Git repositories and

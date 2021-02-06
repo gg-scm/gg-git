@@ -36,7 +36,7 @@ const (
 // PushStream represents a git-receive-pack session.
 type PushStream struct {
 	urlstr string
-	refs   []*Ref
+	refs   map[githash.Ref]*Ref
 	caps   capabilityList
 	conn   receivePackConn
 
@@ -62,11 +62,10 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("push %s: %w", r.urlstr, err)
 	}
-	var refs []*Ref
+	var refs map[githash.Ref]*Ref
 	if ref0 != nil {
-		refs = append(refs, ref0)
-		refs, err = readOtherRefsV1(refs, caps.symrefs(), connReader)
-		if err != nil {
+		refs[ref0.Name] = ref0
+		if err := readOtherRefsV1(refs, caps.symrefs(), connReader); err != nil {
 			return nil, fmt.Errorf("push %s: %w", r.urlstr, err)
 		}
 	}
@@ -79,8 +78,8 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 }
 
 // Refs returns the refs the remote sent when the stream started.
-// The caller must not modify the returned slice.
-func (p *PushStream) Refs() []*Ref {
+// The caller must not modify the returned map.
+func (p *PushStream) Refs() map[githash.Ref]*Ref {
 	return p.refs
 }
 

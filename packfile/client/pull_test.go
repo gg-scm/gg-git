@@ -41,7 +41,6 @@ import (
 	"gg-scm.io/pkg/git/object"
 	"gg-scm.io/pkg/git/packfile"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestPull(t *testing.T) {
@@ -94,30 +93,26 @@ func runPullTest(ctx context.Context, t *testing.T, u *url.URL, version int, obj
 		if err != nil {
 			t.Fatal("ListRefs:", err)
 		}
-		want := []*Ref{
-			{
+		want := map[githash.Ref]*Ref{
+			githash.Head: {
 				Name:         githash.Head,
 				ObjectID:     objects.commit2.SHA1(),
 				SymrefTarget: objects.mainRef,
 			},
-			{
+			objects.mainRef: {
 				Name:     objects.mainRef,
 				ObjectID: objects.commit2.SHA1(),
 			},
-			{
+			objects.ref1: {
 				Name:     objects.ref1,
 				ObjectID: objects.commit1.SHA1(),
 			},
-			{
+			objects.ref2: {
 				Name:     objects.ref2,
 				ObjectID: objects.commit2.SHA1(),
 			},
 		}
-		diff := cmp.Diff(
-			want, got,
-			cmpopts.SortSlices(func(r1, r2 *Ref) bool { return r1.Name < r2.Name }),
-		)
-		if diff != "" {
+		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("ListRefs() (-want +got):\n%s", diff)
 		}
 	})

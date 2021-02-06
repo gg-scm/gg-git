@@ -45,7 +45,7 @@ func (p *pullV2) Close() error {
 	return nil
 }
 
-func (p *pullV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, error) {
+func (p *pullV2) listRefs(ctx context.Context, refPrefixes []string) (map[githash.Ref]*Ref, error) {
 	if !p.caps.supports(listRefsV2Command) {
 		return nil, fmt.Errorf("unsupported by server")
 	}
@@ -63,7 +63,7 @@ func (p *pullV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, er
 		return nil, err
 	}
 	defer resp.Close()
-	var refs []*Ref
+	refs := make(map[githash.Ref]*Ref)
 	respReader := pktline.NewReader(resp)
 	for respReader.Next() && respReader.Type() != pktline.Flush {
 		line, err := respReader.Text()
@@ -90,7 +90,7 @@ func (p *pullV2) listRefs(ctx context.Context, refPrefixes []string) ([]*Ref, er
 				}
 			}
 		}
-		refs = append(refs, ref)
+		refs[ref.Name] = ref
 	}
 	if err := respReader.Err(); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
