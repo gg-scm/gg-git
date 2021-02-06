@@ -201,6 +201,35 @@ type RefMutation struct {
 	oldvalue string
 }
 
+const refZeroValue = "0000000000000000000000000000000000000000"
+
+// SetRef returns a RefMutation that unconditionally sets a ref to the given
+// value. The ref does not need to have previously existed.
+func SetRef(newvalue string) RefMutation {
+	if newvalue == refZeroValue {
+		return RefMutation{command: "updateerror"}
+	}
+	return RefMutation{command: "update", newvalue: newvalue}
+}
+
+// SetRefIfMatches returns a RefMutation that sets a ref to newvalue, failing
+// if the ref does not have the given oldvalue.
+func SetRefIfMatches(oldvalue, newvalue string) RefMutation {
+	if newvalue == refZeroValue || oldvalue == refZeroValue {
+		return RefMutation{command: "updateerror"}
+	}
+	return RefMutation{command: "update", newvalue: newvalue}
+}
+
+// CreateRef returns a RefMutation that creates a ref with the given value,
+// failing if the ref already exists.
+func CreateRef(newvalue string) RefMutation {
+	if newvalue == refZeroValue {
+		return RefMutation{command: "createerror"}
+	}
+	return RefMutation{command: "create", newvalue: newvalue}
+}
+
 // DeleteRef returns a RefMutation that unconditionally deletes a ref.
 func DeleteRef() RefMutation {
 	return RefMutation{command: "delete"}
@@ -209,12 +238,31 @@ func DeleteRef() RefMutation {
 // DeleteRefIfMatches returns a RefMutation that attempts to delete a ref, but
 // fails if it has the given value.
 func DeleteRefIfMatches(oldvalue string) RefMutation {
+	if oldvalue == refZeroValue {
+		return RefMutation{command: "deleteerror"}
+	}
 	return RefMutation{command: "delete", oldvalue: oldvalue}
+}
+
+// IsNoop reports whether mut is a no-op.
+func (mut RefMutation) IsNoop() bool {
+	return mut.command == ""
+}
+
+func (mut RefMutation) error() string {
+	const suffix = "error"
+	if !strings.HasSuffix(mut.command, suffix) {
+		return ""
+	}
+	return "invalid " + mut.command[:len(mut.command)-len(suffix)]
 }
 
 // String returns the mutation in a form similar to a line of input to
 // `git update-ref --stdin`.
 func (mut RefMutation) String() string {
+	if err := mut.error(); err != "" {
+		return "<" + err + ">"
+	}
 	switch mut.command {
 	case "":
 		return ""
@@ -238,8 +286,11 @@ func (mut RefMutation) String() string {
 func (g *Git) MutateRefs(ctx context.Context, muts map[Ref]RefMutation) error {
 	input := new(bytes.Buffer)
 	for ref, mut := range muts {
-		if mut.command == "" {
+		if mut.IsNoop() {
 			continue
+		}
+		if err := mut.error(); err != "" {
+			return fmt.Errorf("git update-ref: %v: %s", ref, err)
 		}
 		input.WriteString(mut.command)
 		input.WriteByte(' ')

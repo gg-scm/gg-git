@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][]
 
+### Added
+
+-  There are several new `git.RefMutation` constructors: `SetRef`,
+   `SetRefIfMatches`, and `CreateRef`.
+-  `git.RefMutation` has a new `IsNoop` method to make it easier to check for
+   the zero value.
+
 ### Changed
 
 -  `*client.PullStream.ListRefs` and `*client.PushStream.Refs` now return a map
