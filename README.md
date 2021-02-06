@@ -86,6 +86,24 @@ fidelity of interactions with Git matters.
 [invoke Git]: https://pkg.go.dev/gg-scm.io/pkg/git#Git.Run
 [LogHook]: https://pkg.go.dev/gg-scm.io/pkg/git#Options.LogHook
 
+## Stability
+
+The following packages are stable and we make a reasonable effort to avoid
+backward-incompatible changes:
+
+-  `gg-scm.io/pkg/git`
+-  `gg-scm.io/pkg/git/githash`
+
+The following packages are relatively new and may still make breaking changes:
+
+-  `gg-scm.io/pkg/git/object`
+-  `gg-scm.io/pkg/git/packfile`
+-  `gg-scm.io/pkg/git/packfile/client`
+
+Because we still have some packages in early development, we have kept the
+entire repository on major version 0. When all packages are stable, we will
+start using major version 1.
+
 ## Contributing
 
 We'd love to accept your patches and contributions to this project.
