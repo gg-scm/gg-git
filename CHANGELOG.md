@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    `SetRefIfMatches`, and `CreateRef`.
 -  `git.RefMutation` has a new `IsNoop` method to make it easier to check for
    the zero value.
+-  `git.CommitOptions` and `git.AmendOptions` have a new field: `SkipHooks`.
 
 ### Changed
 

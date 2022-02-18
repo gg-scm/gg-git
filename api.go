@@ -523,6 +523,9 @@ type CommitOptions struct {
 	AuthorTime time.Time
 	Committer  object.User
 	CommitTime time.Time
+
+	// If SkipHooks is true, pre-commit and commit-msg hooks will be skipped.
+	SkipHooks bool
 }
 
 func (opts CommitOptions) addToEnv(env []string) []string {
@@ -543,13 +546,20 @@ func (opts CommitOptions) addToEnv(env []string) []string {
 	return env
 }
 
+func (opts CommitOptions) addToArgs(args []string) []string {
+	if opts.SkipHooks {
+		args = append(args, "--no-verify")
+	}
+	return args
+}
+
 // Commit creates a new commit on HEAD with the staged content.
 // The message will be used exactly as given.
 func (g *Git) Commit(ctx context.Context, message string, opts CommitOptions) error {
 	out := new(bytes.Buffer)
 	w := &limitWriter{w: out, n: errorOutputLimit}
 	err := g.runner.RunGit(ctx, &Invocation{
-		Args:   []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim"},
+		Args:   opts.addToArgs([]string{"commit", "--quiet", "--file=-", "--cleanup=verbatim"}),
 		Dir:    g.dir,
 		Env:    opts.addToEnv(nil),
 		Stdin:  strings.NewReader(message),
@@ -568,7 +578,7 @@ func (g *Git) CommitAll(ctx context.Context, message string, opts CommitOptions)
 	out := new(bytes.Buffer)
 	w := &limitWriter{w: out, n: errorOutputLimit}
 	err := g.runner.RunGit(ctx, &Invocation{
-		Args:   []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim", "--all"},
+		Args:   opts.addToArgs([]string{"commit", "--quiet", "--file=-", "--cleanup=verbatim", "--all"}),
 		Dir:    g.dir,
 		Env:    opts.addToEnv(nil),
 		Stdin:  strings.NewReader(message),
@@ -612,7 +622,9 @@ func (g *Git) CommitFiles(ctx context.Context, message string, pathspecs []Paths
 			}
 		}
 	}
-	args := []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim", "--only", "--allow-empty", "--"}
+	args := []string{"commit", "--quiet", "--file=-", "--cleanup=verbatim", "--only", "--allow-empty"}
+	args = opts.addToArgs(args)
+	args = append(args, "--")
 	for _, spec := range pathspecs {
 		args = append(args, spec.String())
 	}
@@ -650,14 +662,20 @@ type AmendOptions struct {
 	// If CommitTime is not zero, then it will be used as the commit time
 	// instead of now.
 	CommitTime time.Time
+
+	// If SkipHooks is true, pre-commit and commit-msg hooks will be skipped.
+	SkipHooks bool
 }
 
-func (opts AmendOptions) addAuthorToArgs(args []string) []string {
+func (opts AmendOptions) addToArgs(args []string) []string {
 	if opts.Author != "" {
 		args = append(args, "--author="+string(opts.Author))
 	}
 	if !opts.AuthorTime.IsZero() {
 		args = append(args, "--date="+opts.AuthorTime.Format(time.RFC3339))
+	}
+	if opts.SkipHooks {
+		args = append(args, "--no-verify")
 	}
 	return args
 }
@@ -688,7 +706,7 @@ func (g *Git) Amend(ctx context.Context, opts AmendOptions) error {
 	out := new(bytes.Buffer)
 	w := &limitWriter{w: out, n: errorOutputLimit}
 	err := g.runner.RunGit(ctx, &Invocation{
-		Args: opts.addAuthorToArgs([]string{
+		Args: opts.addToArgs([]string{
 			"commit",
 			"--amend",
 			"--quiet",
@@ -722,7 +740,7 @@ func (g *Git) AmendAll(ctx context.Context, opts AmendOptions) error {
 	out := new(bytes.Buffer)
 	w := &limitWriter{w: out, n: errorOutputLimit}
 	err := g.runner.RunGit(ctx, &Invocation{
-		Args: opts.addAuthorToArgs([]string{
+		Args: opts.addToArgs([]string{
 			"commit",
 			"--amend",
 			"--all",
@@ -784,7 +802,7 @@ func (g *Git) AmendFiles(ctx context.Context, pathspecs []Pathspec, opts AmendOp
 			}
 		}
 	}
-	args := opts.addAuthorToArgs([]string{
+	args := opts.addToArgs([]string{
 		"commit",
 		"--amend",
 		"--only",
