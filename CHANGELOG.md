@@ -9,16 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
--  There are several new `git.RefMutation` constructors: `SetRef`,
-   `SetRefIfMatches`, and `CreateRef`.
--  `git.RefMutation` has a new `IsNoop` method to make it easier to check for
-   the zero value.
--  `git.CommitOptions` and `git.AmendOptions` have a new field: `SkipHooks`.
+- There are several new `git.RefMutation` constructors: `SetRef`,
+  `SetRefIfMatches`, and `CreateRef`.
+- `git.RefMutation` has a new `IsNoop` method to make it easier to check for
+  the zero value.
+- `git.CommitOptions` and `git.AmendOptions` have a new field: `SkipHooks`.
+- New method `Git.DeleteBranches`.
 
 ### Changed
 
--  `*client.PullStream.ListRefs` and `*client.PushStream.Refs` now return a map
-   of refs instead of a slice.
+- `*client.PullStream.ListRefs` and `*client.PushStream.Refs` now return a map
+  of refs instead of a slice.
 
 ## [0.9.0][] - 2021-01-26
 

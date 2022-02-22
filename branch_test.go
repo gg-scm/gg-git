@@ -295,3 +295,49 @@ func TestNewBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteBranches(t *testing.T) {
+	ctx := context.Background()
+	gitPath, err := findGit()
+	if err != nil {
+		t.Skip("git not found:", err)
+	}
+	env, err := newTestEnv(ctx, gitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer env.cleanup()
+
+	// Create a repository with a commit and a branch "foo".
+	if err := env.g.Init(ctx, "."); err != nil {
+		t.Fatal(err)
+	}
+	const content = "Hello, World!\n"
+	if err := env.root.Apply(filesystem.Write("file.txt", content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Add(ctx, []Pathspec{"file.txt"}, AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.Commit(ctx, dummyContent, CommitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.g.NewBranch(ctx, "foo", BranchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the branch "foo".
+	if err := env.g.DeleteBranches(ctx, []string{"foo"}, DeleteBranchOptions{}); err != nil {
+		t.Error(err)
+	}
+
+	// Verify that "foo" no longer exists.
+	refs, err := env.g.ListRefs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fooRef = Ref("refs/heads/foo")
+	if hash, ok := refs[fooRef]; ok {
+		t.Errorf("%s = %v; want missing", fooRef, hash)
+	}
+}

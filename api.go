@@ -1021,6 +1021,36 @@ func (g *Git) NewBranch(ctx context.Context, name string, opts BranchOptions) er
 	return g.run(ctx, errPrefix, args)
 }
 
+// DeleteBranchOptions specifies options for a new branch.
+type DeleteBranchOptions struct {
+	// If Force is true, then the branch will be deleted
+	// even if the branch has not been merged
+	// or if the branch does not point to a valid commit.
+	Force bool
+}
+
+// DeleteBranches deletes zero or more branches.
+// If names is empty, then DeleteBranches returns nil without running Git.
+func (g *Git) DeleteBranches(ctx context.Context, names []string, opts DeleteBranchOptions) error {
+	if len(names) == 0 {
+		return nil
+	}
+	errPrefix := "git branch --delete " + strings.Join(names, " ")
+	for _, name := range names {
+		if err := validateBranch(name); err != nil {
+			return fmt.Errorf("%s: %w", errPrefix, err)
+		}
+	}
+	args := make([]string, 0, len(names)+4)
+	args = append(args, "branch", "--delete")
+	if opts.Force {
+		args = append(args, "--force")
+	}
+	args = append(args, "--")
+	args = append(args, names...)
+	return g.run(ctx, errPrefix, args)
+}
+
 // NullTreeHash computes the hash of an empty tree and adds it to the
 // repository. This is sometimes useful as a diff comparison target.
 func (g *Git) NullTreeHash(ctx context.Context) (Hash, error) {
