@@ -48,6 +48,12 @@ type Commit struct {
 	// The Location is significant.
 	CommitTime time.Time
 
+	// Extra stores any lines in the commit object
+	// between the committer line and the gpgsig line.
+	// It will never begin or end with a newline,
+	// nor will it contain blank lines.
+	Extra CommitFields
+
 	// If GPGSignature is not empty, then it is the ASCII-armored signature of
 	// the commit.
 	GPGSignature []byte
@@ -72,6 +78,16 @@ func (c *Commit) UnmarshalText(data []byte) error {
 
 // UnmarshalBinary deserializes a commit from the Git object format.
 func (c *Commit) UnmarshalBinary(data []byte) error {
+	// See parse_commit_buffer in Git's commit.c for accepted format.
+	// It's pretty loose, but the first 4 keys must be in this order:
+	// 1. tree
+	// 2. parent (zero or more)
+	// 3. author
+	// 4. committer
+	//
+	// The only other restriction AFAICT is
+	// gpgsig must be immediately before the message.
+
 	var ok bool
 	data, ok = consumeString(data, "tree ")
 	if !ok {
@@ -119,13 +135,27 @@ func (c *Commit) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("parse git commit: committer: %w", err)
 	}
-	data, ok = consumeString(data, "gpgsig ")
-	if ok {
-		c.GPGSignature, data, err = consumeSignature(data)
-		if err != nil {
-			return fmt.Errorf("parse git commit: gpg signature: %w", err)
+	extra := new(strings.Builder)
+	for {
+		data, ok = consumeString(data, "gpgsig ")
+		if ok {
+			c.GPGSignature, data, err = consumeSignature(data)
+			if err != nil {
+				return fmt.Errorf("parse git commit: gpg signature: %w", err)
+			}
+			break
 		}
+		eol := bytes.IndexByte(data, '\n')
+		if eol == 0 {
+			break
+		}
+		if eol == -1 {
+			return fmt.Errorf("parse git commit: message: expect blank line after header")
+		}
+		extra.Write(data[:eol+1])
+		data = data[eol+1:]
 	}
+	c.Extra = CommitFields(strings.TrimSuffix(extra.String(), "\n"))
 	data, ok = consumeString(data, "\n")
 	if !ok {
 		return fmt.Errorf("parse git commit: message: expect blank line after header")
@@ -142,6 +172,8 @@ func (c *Commit) MarshalText() ([]byte, error) {
 
 // MarshalBinary serializes a commit into the Git object format.
 func (c *Commit) MarshalBinary() ([]byte, error) {
+	// See commit_tree_extended in Git's commit.c for equivalent logic.
+
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "tree %x\n", c.Tree)
 	for _, par := range c.Parents {
@@ -152,6 +184,13 @@ func (c *Commit) MarshalBinary() ([]byte, error) {
 	}
 	if err := writeUser(buf, "committer", c.Committer, c.CommitTime); err != nil {
 		return nil, fmt.Errorf("marshal git commit: %w", err)
+	}
+	if !c.Extra.IsValid() {
+		return nil, fmt.Errorf("marshal git commit: extra headers not valid")
+	}
+	if len(c.Extra) > 0 {
+		buf.WriteString(string(c.Extra))
+		buf.WriteString("\n")
 	}
 	if err := writeGPGSignature(buf, c.GPGSignature); err != nil {
 		return nil, fmt.Errorf("marshal git commit: %w", err)
@@ -378,6 +417,75 @@ func (u User) Name() string {
 func (u User) Email() string {
 	_, email := u.split()
 	return email
+}
+
+// CommitFields is a block of lines, conventionally in the form "key value".
+// A value may span multiple lines by starting each continuation line with a space.
+type CommitFields string
+
+// IsValid reports whether fields can be serialized into a Git commit.
+// Valid fields do not begin or end with a newline
+// and do not contain blank lines.
+func (fields CommitFields) IsValid() bool {
+	return !strings.HasPrefix(string(fields), "\n") &&
+		!strings.HasSuffix(string(fields), "\n") &&
+		!strings.Contains(string(fields), "\n\n") &&
+		!strings.Contains(string(fields), "\x00")
+}
+
+// Cut slices fields around the first field.
+func (fields CommitFields) Cut() (head, tail CommitFields) {
+	for i := 0; ; {
+		eol := strings.IndexByte(string(fields[i:]), '\n')
+		if eol == -1 {
+			return fields, ""
+		}
+		eol += i
+		if !strings.HasPrefix(string(fields[eol+1:]), " ") {
+			return fields[:eol], fields[eol+1:]
+		}
+		// Continuation line: keep going.
+		i = eol + 1
+	}
+}
+
+// First returns the first field's key and value.
+func (fields CommitFields) First() (key, value string) {
+	field, _ := fields.Cut()
+	key, value = field.cutKV()
+	value = normalizeContinuations(value)
+	return
+}
+
+// cutKV cuts a single field into its key and value.
+// field must only contain a single field.
+func (field CommitFields) cutKV() (key, value string) {
+	firstLine := string(field)
+	if eol := strings.IndexByte(firstLine, '\n'); eol != -1 {
+		firstLine = firstLine[:eol]
+	}
+	if sp := strings.IndexByte(firstLine, ' '); sp != -1 {
+		return firstLine[:sp], string(field[sp+1:])
+	}
+	return firstLine, string(field[len(firstLine):])
+}
+
+// Get returns the value of the first field in fields with the given key,
+// or the empty string if no such field exists.
+func (fields CommitFields) Get(key string) string {
+	for fields != "" {
+		head, tail := fields.Cut()
+		k, v := head.cutKV()
+		if k == key {
+			return normalizeContinuations(v)
+		}
+		fields = tail
+	}
+	return ""
+}
+
+func normalizeContinuations(s string) string {
+	return strings.ReplaceAll(s, "\n ", "\n")
 }
 
 // isSafeForHeader reports whether s is safe to be included as an element of an

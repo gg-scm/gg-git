@@ -15,11 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the zero value.
 - `git.CommitOptions` and `git.AmendOptions` have a new field: `SkipHooks`.
 - New method `Git.DeleteBranches`.
+- `object.Commit` has a new field `Extra` that stores any additional commit fields.
 
 ### Changed
 
 - `*client.PullStream.ListRefs` and `*client.PushStream.Refs` now return a map
   of refs instead of a slice.
+
+### Fixed
+
+- `object.ParseCommit` no longer rejects commits with extra fields.
+  ([#23](https://github.com/gg-scm/gg-git/issues/23))
 
 ## [0.9.0][] - 2021-01-26
 

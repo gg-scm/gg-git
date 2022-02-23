@@ -121,6 +121,31 @@ var gitCommitTests = []struct {
 			Message: "Create NOTES.md",
 		},
 	},
+	{
+		name: "Go",
+		id:   hashLiteral("7d7c6a97f815e9279d08cfaea7d5efb5e90695a8"),
+		data: "tree e06bd601885e16ad3d72c2a8c9b411889b2e478e\n" +
+			"author Brian Kernighan <bwk> 80352345 -0500\n" +
+			"committer Brian Kernighan <bwk> 80352345 -0500\n" +
+			"golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb\n" +
+			"\n" +
+			"hello, world\n" +
+			"\n" +
+			"R=ken\n" +
+			"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+		parsed: &Commit{
+			Tree:       hashLiteral("e06bd601885e16ad3d72c2a8c9b411889b2e478e"),
+			Author:     "Brian Kernighan <bwk>",
+			AuthorTime: time.Unix(80352345, 0).In(time.FixedZone("-0500", -5*60*60)),
+			Committer:  "Brian Kernighan <bwk>",
+			CommitTime: time.Unix(80352345, 0).In(time.FixedZone("-0500", -5*60*60)),
+			Extra:      "golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb",
+			Message: "hello, world\n" +
+				"\n" +
+				"R=ken\n" +
+				"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+		},
+	},
 }
 
 func TestParseCommit(t *testing.T) {
@@ -224,6 +249,141 @@ func TestMakeUser(t *testing.T) {
 		}
 		if got := test.want.Email(); got != test.email {
 			t.Errorf("User(%q).Email() = %q; want %q", test.want, got, test.email)
+		}
+	}
+}
+
+func TestCommitFieldsCut(t *testing.T) {
+	tests := []struct {
+		fields   CommitFields
+		wantHead CommitFields
+		wantTail CommitFields
+	}{
+		{
+			fields:   "",
+			wantHead: "",
+			wantTail: "",
+		},
+		{
+			fields:   "foo bar",
+			wantHead: "foo bar",
+			wantTail: "",
+		},
+		{
+			fields:   "foo bar\nbaz quux",
+			wantHead: "foo bar",
+			wantTail: "baz quux",
+		},
+		{
+			fields:   "foo bar\n baz quux",
+			wantHead: "foo bar\n baz quux",
+			wantTail: "",
+		},
+		{
+			fields:   "foo bar\n baz quux\ngpgsig",
+			wantHead: "foo bar\n baz quux",
+			wantTail: "gpgsig",
+		},
+	}
+	for _, test := range tests {
+		gotHead, gotTail := test.fields.Cut()
+		if gotHead != test.wantHead || gotTail != test.wantTail {
+			t.Errorf("CommitFields(%q).Cut() = %q, %q; want %q, %q", test.fields, gotHead, gotTail, test.wantHead, test.wantTail)
+		}
+	}
+}
+
+func TestCommitFieldsFirst(t *testing.T) {
+	tests := []struct {
+		fields    CommitFields
+		wantKey   string
+		wantValue string
+	}{
+		{
+			fields:    "",
+			wantKey:   "",
+			wantValue: "",
+		},
+		{
+			fields:    "foo bar",
+			wantKey:   "foo",
+			wantValue: "bar",
+		},
+		{
+			fields:    "foo bar\nbaz quux",
+			wantKey:   "foo",
+			wantValue: "bar",
+		},
+		{
+			fields:    "foo bar\n baz quux",
+			wantKey:   "foo",
+			wantValue: "bar\nbaz quux",
+		},
+		{
+			fields:    "foo bar\n baz quux\ngpgsig",
+			wantKey:   "foo",
+			wantValue: "bar\nbaz quux",
+		},
+		{
+			fields:    "foo\n bar baz\ngpgsig",
+			wantKey:   "foo",
+			wantValue: "\nbar baz",
+		},
+	}
+	for _, test := range tests {
+		gotKey, gotValue := test.fields.First()
+		if gotKey != test.wantKey || gotValue != test.wantValue {
+			t.Errorf("CommitFields(%q).First() = %q, %q; want %q, %q", test.fields, gotKey, gotValue, test.wantKey, test.wantValue)
+		}
+	}
+}
+
+func TestCommitFieldsGet(t *testing.T) {
+	tests := []struct {
+		fields CommitFields
+		key    string
+		want   string
+	}{
+		{
+			fields: "",
+			key:    "foo",
+			want:   "",
+		},
+		{
+			fields: "foo bar",
+			key:    "foo",
+			want:   "bar",
+		},
+		{
+			fields: "hello world",
+			key:    "foo",
+			want:   "",
+		},
+		{
+			fields: "hello world\nfoo bar",
+			key:    "foo",
+			want:   "bar",
+		},
+		{
+			fields: "foo bar\nhello world",
+			key:    "foo",
+			want:   "bar",
+		},
+		{
+			fields: "foo bar\n continuation line\nhello world",
+			key:    "foo",
+			want:   "bar\ncontinuation line",
+		},
+		{
+			fields: "foo bar\n continuation line\nhello world",
+			key:    " continuation",
+			want:   "",
+		},
+	}
+	for _, test := range tests {
+		got := test.fields.Get(test.key)
+		if got != test.want {
+			t.Errorf("CommitFields(%q).Get(%q) = %q; want %q", test.fields, test.key, got, test.want)
 		}
 	}
 }
