@@ -3,9 +3,14 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.9.0...main
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.10.0...main
 
-## [Unreleased][]
+## [0.10.0][] - 2022-02-22
+
+Version 0.10 adds several features for mutating refs in a working copy
+and correctly handles extra fields in commit objects.
+
+[0.10.0]: https://github.com/gg-scm/gg-git/releases/tag/v0.10.0
 
 ### Added
 
