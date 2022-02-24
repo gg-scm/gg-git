@@ -34,80 +34,28 @@ func ParseHash(s string) (Hash, error) {
 }
 
 // A Ref is a Git reference to a commit.
-type Ref string
+type Ref = githash.Ref
 
 // Top-level refs.
 const (
 	// Head names the commit on which the changes in the working tree
 	// are based.
-	Head Ref = "HEAD"
+	Head = githash.Head
 
 	// FetchHead records the branch which was fetched from a remote
 	// repository with the last git fetch invocation.
-	FetchHead Ref = "FETCH_HEAD"
+	FetchHead = githash.FetchHead
 )
 
 // BranchRef returns a ref for the given branch name.
 func BranchRef(b string) Ref {
-	return branchPrefix + Ref(b)
+	return githash.BranchRef(b)
 }
 
 // TagRef returns a ref for the given tag name.
 func TagRef(t string) Ref {
-	return tagPrefix + Ref(t)
+	return githash.TagRef(t)
 }
-
-// IsValid reports whether r is a valid reference.
-func (r Ref) IsValid() bool {
-	// See https://git-scm.com/docs/git-check-ref-format for details.
-	return r != "" &&
-		r[0] != '-' && r[0] != '.' &&
-		r[len(r)-1] != '.' &&
-		!strings.ContainsAny(string(r), " :~^\\") &&
-		!strings.Contains(string(r), "..") &&
-		!strings.Contains(string(r), "@{") &&
-		!strings.Contains(string(r), "//") &&
-		!strings.Contains(string(r), "/.")
-}
-
-// String returns the ref as a string.
-func (r Ref) String() string {
-	return string(r)
-}
-
-// IsBranch reports whether r starts with "refs/heads/".
-func (r Ref) IsBranch() bool {
-	return r.IsValid() && strings.HasPrefix(string(r), branchPrefix)
-}
-
-// Branch returns the string after "refs/heads/" or an empty string
-// if the ref does not start with "refs/heads/".
-func (r Ref) Branch() string {
-	if !r.IsBranch() {
-		return ""
-	}
-	return string(r[len(branchPrefix):])
-}
-
-// IsTag reports whether r starts with "refs/tags/".
-func (r Ref) IsTag() bool {
-	return r.IsValid() && strings.HasPrefix(string(r), tagPrefix)
-}
-
-// Tag returns the string after "refs/tags/" or an empty string
-// if the ref does not start with "refs/tags/".
-func (r Ref) Tag() string {
-	if !r.IsTag() {
-		return ""
-	}
-	return string(r[len(tagPrefix):])
-}
-
-// Ref prefixes.
-const (
-	branchPrefix = "refs/heads/"
-	tagPrefix    = "refs/tags/"
-)
 
 // Head returns the working copy's branch revision. If the branch does
 // not point to a valid commit (such as when the repository is first
@@ -253,6 +201,35 @@ type RefMutation struct {
 	oldvalue string
 }
 
+const refZeroValue = "0000000000000000000000000000000000000000"
+
+// SetRef returns a RefMutation that unconditionally sets a ref to the given
+// value. The ref does not need to have previously existed.
+func SetRef(newvalue string) RefMutation {
+	if newvalue == refZeroValue {
+		return RefMutation{command: "updateerror"}
+	}
+	return RefMutation{command: "update", newvalue: newvalue}
+}
+
+// SetRefIfMatches returns a RefMutation that sets a ref to newvalue, failing
+// if the ref does not have the given oldvalue.
+func SetRefIfMatches(oldvalue, newvalue string) RefMutation {
+	if newvalue == refZeroValue || oldvalue == refZeroValue {
+		return RefMutation{command: "updateerror"}
+	}
+	return RefMutation{command: "update", newvalue: newvalue}
+}
+
+// CreateRef returns a RefMutation that creates a ref with the given value,
+// failing if the ref already exists.
+func CreateRef(newvalue string) RefMutation {
+	if newvalue == refZeroValue {
+		return RefMutation{command: "createerror"}
+	}
+	return RefMutation{command: "create", newvalue: newvalue}
+}
+
 // DeleteRef returns a RefMutation that unconditionally deletes a ref.
 func DeleteRef() RefMutation {
 	return RefMutation{command: "delete"}
@@ -261,12 +238,31 @@ func DeleteRef() RefMutation {
 // DeleteRefIfMatches returns a RefMutation that attempts to delete a ref, but
 // fails if it has the given value.
 func DeleteRefIfMatches(oldvalue string) RefMutation {
+	if oldvalue == refZeroValue {
+		return RefMutation{command: "deleteerror"}
+	}
 	return RefMutation{command: "delete", oldvalue: oldvalue}
+}
+
+// IsNoop reports whether mut is a no-op.
+func (mut RefMutation) IsNoop() bool {
+	return mut.command == ""
+}
+
+func (mut RefMutation) error() string {
+	const suffix = "error"
+	if !strings.HasSuffix(mut.command, suffix) {
+		return ""
+	}
+	return "invalid " + mut.command[:len(mut.command)-len(suffix)]
 }
 
 // String returns the mutation in a form similar to a line of input to
 // `git update-ref --stdin`.
 func (mut RefMutation) String() string {
+	if err := mut.error(); err != "" {
+		return "<" + err + ">"
+	}
 	switch mut.command {
 	case "":
 		return ""
@@ -290,8 +286,11 @@ func (mut RefMutation) String() string {
 func (g *Git) MutateRefs(ctx context.Context, muts map[Ref]RefMutation) error {
 	input := new(bytes.Buffer)
 	for ref, mut := range muts {
-		if mut.command == "" {
+		if mut.IsNoop() {
 			continue
+		}
+		if err := mut.error(); err != "" {
+			return fmt.Errorf("git update-ref: %v: %s", ref, err)
 		}
 		input.WriteString(mut.command)
 		input.WriteByte(' ')

@@ -18,50 +18,21 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
+	"strconv"
 	"strings"
-	"time"
+	"sync"
+
+	"gg-scm.io/pkg/git/object"
 )
 
-// CommitInfo stores information about a single commit.
-type CommitInfo struct {
-	Hash       Hash
-	Parents    []Hash
-	Author     User
-	Committer  User
-	AuthorTime time.Time
-	CommitTime time.Time
-	Message    string
-}
-
-// Summary returns the first line of the message.
-func (c *CommitInfo) Summary() string {
-	i := strings.IndexByte(c.Message, '\n')
-	if i == -1 {
-		return c.Message
-	}
-	return c.Message[:i]
-}
-
-// User identifies an author or committer.
-type User struct {
-	// Name is the user's full name.
-	Name string
-	// Email is the user's email address.
-	Email string
-}
-
-// String returns the user information as a string in the
-// form "User Name <foo@example.com>".
-func (u User) String() string {
-	return fmt.Sprintf("%s <%s>", u.Name, u.Email)
-}
-
 // CommitInfo obtains information about a single commit.
-func (g *Git) CommitInfo(ctx context.Context, rev string) (*CommitInfo, error) {
-	errPrefix := fmt.Sprintf("git log %q", rev)
+func (g *Git) CommitInfo(ctx context.Context, rev string) (*object.Commit, error) {
+	errPrefix := fmt.Sprintf("git cat-file commit %q", rev)
 	if err := validateRev(rev); err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -76,75 +47,18 @@ func (g *Git) CommitInfo(ctx context.Context, rev string) (*CommitInfo, error) {
 	}
 
 	out, err := g.output(ctx, errPrefix, []string{
-		"log",
-		"--max-count=1",
-		"-z",
-		"--pretty=" + commitInfoPrettyFormat,
+		"cat-file",
+		string(object.TypeCommit),
 		rev,
-		"--",
 	})
 	if err != nil {
 		return nil, err
 	}
-	info, err := parseCommitInfo(out)
+	c, err := object.ParseCommit([]byte(out))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	return info, nil
-}
-
-const (
-	commitInfoPrettyFormat = "tformat:%H%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B"
-	commitInfoFieldCount   = 9
-)
-
-func parseCommitInfo(out string) (*CommitInfo, error) {
-	if !strings.HasSuffix(out, "\x00") {
-		return nil, errors.New("parse commit: invalid format")
-	}
-	fields := strings.Split(out[:len(out)-1], "\x00")
-	if len(fields) != commitInfoFieldCount {
-		return nil, errors.New("parse commit: invalid format")
-	}
-	hash, err := ParseHash(fields[0])
-	if err != nil {
-		return nil, fmt.Errorf("parse commit: hash: %w", err)
-	}
-
-	var parents []Hash
-	if parentStrings := strings.Fields(fields[1]); len(parentStrings) > 0 {
-		parents = make([]Hash, 0, len(parentStrings))
-		for _, s := range parentStrings {
-			p, err := ParseHash(s)
-			if err != nil {
-				return nil, fmt.Errorf("parse commit: parents: %w", err)
-			}
-			parents = append(parents, p)
-		}
-	}
-	authorTime, err := time.Parse(time.RFC3339, fields[4])
-	if err != nil {
-		return nil, fmt.Errorf("parse commit: author time: %w", err)
-	}
-	commitTime, err := time.Parse(time.RFC3339, fields[7])
-	if err != nil {
-		return nil, fmt.Errorf("parse commit: commit time: %w", err)
-	}
-	return &CommitInfo{
-		Hash:    hash,
-		Parents: parents,
-		Author: User{
-			Name:  fields[2],
-			Email: fields[3],
-		},
-		Committer: User{
-			Name:  fields[5],
-			Email: fields[6],
-		},
-		AuthorTime: authorTime,
-		CommitTime: commitTime,
-		Message:    fields[8],
-	}, nil
+	return c, nil
 }
 
 // LogOptions specifies filters and ordering on a log listing.
@@ -175,18 +89,19 @@ type LogOptions struct {
 	NoWalk bool
 }
 
+const logErrPrefix = "git rev-list | git cat-file --batch"
+
 // Log starts fetching information about a set of commits. The context's
 // deadline and cancelation will apply to the entire read from the Log.
-func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
+func (g *Git) Log(ctx context.Context, opts LogOptions) (_ *Log, err error) {
 	// TODO(someday): Add an example for this method.
 
-	const errPrefix = "git log"
 	for _, rev := range opts.Revs {
 		if err := validateRev(rev); err != nil {
-			return nil, fmt.Errorf("%s: %w", errPrefix, err)
+			return nil, fmt.Errorf("%s: %w", logErrPrefix, err)
 		}
 	}
-	args := []string{"log", "-z", "--pretty=" + commitInfoPrettyFormat}
+	args := []string{"rev-list"}
 	if opts.MaxParents > 0 || opts.AllowZeroMaxParents {
 		args = append(args, fmt.Sprintf("--max-parents=%d", opts.MaxParents))
 	}
@@ -202,44 +117,65 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (*Log, error) {
 	if opts.NoWalk {
 		args = append(args, "--no-walk=sorted")
 	}
-	args = append(args, opts.Revs...)
+	if len(opts.Revs) == 0 {
+		args = append(args, Head.String())
+	} else {
+		args = append(args, opts.Revs...)
+	}
 	args = append(args, "--")
 
 	ctx, cancel := context.WithCancel(ctx)
 	stderr := new(bytes.Buffer)
-	pipe, err := StartPipe(ctx, g.runner, &Invocation{
+	stderrMux := &muxWriter{w: &limitWriter{w: stderr, n: 4096}}
+
+	revListStderr := stderrMux.newHandle()
+	revListPipe, err := StartPipe(ctx, g.runner, &Invocation{
 		Args:   args,
 		Dir:    g.dir,
-		Stderr: &limitWriter{w: stderr, n: 4096},
+		Stderr: revListStderr,
 	})
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("%s: %w", errPrefix, err)
+		return nil, fmt.Errorf("%s: %w", logErrPrefix, err)
 	}
 
-	r := bufio.NewReaderSize(pipe, 1<<20 /* 1 MiB */)
-	if _, err := r.Peek(1); err != nil && !errors.Is(err, io.EOF) {
+	catFileStderr := stderrMux.newHandle()
+	catFilePipe, err := StartPipe(ctx, g.runner, &Invocation{
+		Args:   []string{"cat-file", "--batch"},
+		Dir:    g.dir,
+		Stdin:  revListPipe,
+		Stderr: catFileStderr,
+	})
+	if err != nil {
 		cancel()
-		waitErr := pipe.Close()
-		return nil, commandError(errPrefix, waitErr, stderr.Bytes())
+		revListPipe.Close()
+		return nil, fmt.Errorf("%s: %w", logErrPrefix, err)
 	}
+
 	return &Log{
-		r:      r,
+		r:      bufio.NewReaderSize(catFilePipe, 1<<20 /* 1 MiB */),
+		stderr: stderr,
 		cancel: cancel,
-		close:  pipe,
+		hash:   sha1.New(),
+		closers: [...]io.Closer{
+			pipeStreamCloser{catFilePipe, catFileStderr},
+			pipeStreamCloser{revListPipe, revListStderr},
+		},
 	}, nil
 }
 
-// Log is an open handle to a `git log` subprocess. Closing the Log
+// Log is an open handle to a `git cat-file --batch` subprocess. Closing the Log
 // stops the subprocess.
 type Log struct {
-	r      *bufio.Reader
-	cancel context.CancelFunc
-	close  io.Closer
+	r       *bufio.Reader
+	stderr  *bytes.Buffer
+	hash    hash.Hash
+	cancel  context.CancelFunc
+	closers [2]io.Closer
 
 	scanErr  error
 	scanDone bool
-	info     *CommitInfo
+	info     *object.Commit
 }
 
 // Next attempts to scan the next log entry and returns whether there is a new entry.
@@ -247,91 +183,199 @@ func (l *Log) Next() bool {
 	if l.scanDone {
 		return false
 	}
-
-	// Continue growing buffer until we've fit a log entry.
-	end := -1
-	for n := l.r.Buffered(); n < l.r.Size(); {
-		data, err := l.r.Peek(n)
-		end = findCommitInfoEnd(data)
-		if end != -1 {
-			break
+	err := l.next()
+	if err != nil {
+		l.r = nil
+		l.scanErr = err
+		if errors.Is(err, io.EOF) {
+			l.scanErr = nil
 		}
-		if err != nil {
-			switch {
-			case err == io.EOF && l.r.Buffered() == 0:
-				l.abort(nil)
-			case err == io.EOF && l.r.Buffered() > 0:
-				l.abort(io.ErrUnexpectedEOF)
-			default:
-				l.abort(err)
-			}
-			return false
-		}
-		if l.r.Buffered() > n {
-			n = l.r.Buffered()
-		} else {
-			n++
-		}
-	}
-	if end == -1 {
-		l.abort(bufio.ErrBufferFull)
+		l.scanDone = true
+		l.info = nil
+		l.cancel()
 		return false
 	}
-
-	// Parse entry.
-	data, err := l.r.Peek(end)
-	if err != nil {
-		// Should already be buffered.
-		panic(err)
-	}
-	info, err := parseCommitInfo(string(data))
-	if err != nil {
-		l.abort(err)
-		return false
-	}
-	if _, err := l.r.Discard(end); err != nil {
-		// Should already be buffered.
-		panic(err)
-	}
-	l.info = info
 	return true
 }
 
-func (l *Log) abort(e error) {
-	l.r = nil
-	l.scanErr = e
-	l.scanDone = true
-	l.info = nil
-	l.cancel()
-}
-
-func findCommitInfoEnd(b []byte) int {
-	nuls := 0
-	for i := range b {
-		if b[i] != 0 {
-			continue
+func (l *Log) next() error {
+	// Read object information.
+	// Reference: https://git-scm.com/docs/git-cat-file#_batch_output
+	line, err := l.r.ReadSlice('\n')
+	if len(line) == 0 && errors.Is(err, io.EOF) {
+		// Reached successful end. Wait for subprocesses to exit.
+		if err := l.close(); err != nil {
+			return err
 		}
-		nuls++
-		if nuls == commitInfoFieldCount {
-			return i + 1
-		}
+		return io.EOF
 	}
-	return -1
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	fields := bytes.Fields(line)
+	if len(fields) != 3 {
+		return fmt.Errorf("invalid object information line")
+	}
+	var expectSum Hash
+	if err := expectSum.UnmarshalText(fields[0]); err != nil {
+		return err
+	}
+	if !bytes.Equal(fields[1], []byte(object.TypeCommit)) {
+		return fmt.Errorf("commit %v: object is a %s", expectSum, fields[1])
+	}
+	size, err := strconv.Atoi(string(fields[2]))
+	if err != nil {
+		return fmt.Errorf("commit %v: size: %w", expectSum, err)
+	}
+	if size < 0 {
+		return fmt.Errorf("commit %v: negative size", expectSum)
+	}
+
+	// Read commit object.
+	data := make([]byte, size+1)
+	if _, err := io.ReadFull(l.r, data); err != nil {
+		return fmt.Errorf("commit %v: %w", expectSum, err)
+	}
+	if !bytes.HasSuffix(data, []byte("\n")) {
+		return fmt.Errorf("commit %v: does not end with newline", expectSum)
+	}
+	// Validate commit object matches hash.
+	data = data[:len(data)-1]
+	l.hash.Reset()
+	l.hash.Write(object.AppendPrefix(nil, object.TypeCommit, int64(size)))
+	l.hash.Write(data)
+	var gotSum Hash
+	l.hash.Sum(gotSum[:0])
+	if gotSum != expectSum {
+		return fmt.Errorf("commit %v: data does not match object ID", expectSum)
+	}
+	// Parse commit.
+	info, err := object.ParseCommit(data)
+	if err != nil {
+		return fmt.Errorf("commit %v: %w", expectSum, err)
+	}
+	l.info = info
+	return nil
 }
 
 // CommitInfo returns the most recently scanned log entry.
 // Next must be called at least once before calling CommitInfo.
-func (l *Log) CommitInfo() *CommitInfo {
+func (l *Log) CommitInfo() *object.Commit {
 	return l.info
 }
 
 // Close ends the log subprocess and waits for it to finish.
 // Close returns an error if Next returned false due to a parse failure.
 func (l *Log) Close() error {
-	// Not safe to call multiple times, but interface for Close doesn't
-	// require this to be supported.
-
 	l.cancel()
-	l.close.Close() // Ignore error, since it's probably from interrupting.
+	l.close()         // Ignore error, since it's from interrupting.
+	l.scanDone = true // Bail early for future calls to Next.
 	return l.scanErr
+}
+
+func (l *Log) close() error {
+	var first error
+	for i, c := range l.closers {
+		if c == nil {
+			continue
+		}
+		if err := c.Close(); first == nil {
+			first = err
+		}
+		l.closers[i] = nil
+	}
+	if first != nil {
+		return commandError(logErrPrefix, first, l.stderr.Bytes())
+	}
+	return nil
+}
+
+// A muxWriter synchronizes access to a writer through a number of handles.
+type muxWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (mux *muxWriter) newHandle() *muxWriterStream {
+	return &muxWriterStream{
+		buf: make([]byte, 0, 1024),
+		mux: mux,
+	}
+}
+
+// A muxWriterStream is a single stream of lines being sent to the muxWriter.
+type muxWriterStream struct {
+	buf []byte
+	mux *muxWriter
+}
+
+func (stream *muxWriterStream) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	lastLF := bytes.LastIndexByte(data, '\n')
+	if lastLF == -1 {
+		// No newline; must buffer.
+		newBufSize := len(stream.buf) + len(data)
+		if newBufSize > cap(stream.buf) {
+			return 0, errors.New("line too long")
+		}
+		stream.buf = append(stream.buf, data...)
+		return len(data), nil
+	}
+	end := lastLF + 1
+
+	stream.mux.mu.Lock()
+	defer stream.mux.mu.Unlock()
+	if err := stream.flushLocked(); err != nil {
+		return 0, err
+	}
+	n, err := stream.mux.w.Write(data[:end])
+	if err != nil {
+		return n, err
+	}
+	trailing := data[end:]
+	if len(trailing) > cap(stream.buf) {
+		return n, errors.New("line too long")
+	}
+	stream.buf = append(stream.buf, trailing...)
+	return len(data), nil
+}
+
+func (stream *muxWriterStream) Flush() error {
+	stream.mux.mu.Lock()
+	defer stream.mux.mu.Unlock()
+	return stream.flushLocked()
+}
+
+func (stream *muxWriterStream) flushLocked() error {
+	if len(stream.buf) == 0 {
+		return nil
+	}
+	n, err := stream.mux.w.Write(stream.buf)
+	if n < len(stream.buf) {
+		// Move data to beginning to avoid dealing with buffer wraparound.
+		newBufSize := copy(stream.buf, stream.buf[n:])
+		stream.buf = stream.buf[:newBufSize]
+	} else {
+		stream.buf = stream.buf[:0]
+	}
+	return err
+}
+
+type pipeStreamCloser struct {
+	pipe   io.Closer
+	stream interface{ Flush() error }
+}
+
+func (c pipeStreamCloser) Close() error {
+	err := c.pipe.Close()
+	err2 := c.stream.Flush()
+	if err == nil {
+		err = err2
+	}
+	return err
 }

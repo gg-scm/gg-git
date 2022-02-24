@@ -43,11 +43,11 @@ jobs:
           libz-dev \
           xz-utils
     - name: Set up Go
-      uses: actions/setup-go@v1
+      uses: actions/setup-go@v2
       with:
         go-version: 1.15
     - name: Check out code
-      uses: actions/checkout@v1
+      uses: actions/checkout@v2
     - name: Install Git
       run: misc/build-git.bash ~/git ${{ matrix.git }}
     - name: Download dependencies
@@ -60,6 +60,7 @@ jobs:
           go test \
             -mod=readonly \
             -v \
+            -race \
             ./...
       env:
         GO111MODULE: on
@@ -70,11 +71,11 @@ jobs:
     - name: Install xz
       run: brew update && brew install xz
     - name: Set up Go
-      uses: actions/setup-go@v1
+      uses: actions/setup-go@v2
       with:
         go-version: 1.15
     - name: Check out code
-      uses: actions/checkout@v1
+      uses: actions/checkout@v2
     - name: Install Git
       run: misc/build-git.bash ~/git 2.27.0
     - name: Download dependencies
@@ -87,6 +88,7 @@ jobs:
           go test \
             -mod=readonly \
             -v \
+            -race \
             ./...
       env:
         GO111MODULE: on
@@ -95,16 +97,16 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Set up Go
-      uses: actions/setup-go@v1
+      uses: actions/setup-go@v2
       with:
         go-version: 1.15
     - name: Check out code
-      uses: actions/checkout@v1
+      uses: actions/checkout@v2
     - name: Download dependencies
       run: go mod download
       env:
         GO111MODULE: on
     - name: Run tests
-      run: go test -mod=readonly -v ./...
+      run: go test -mod=readonly -v -race ./...
       env:
         GO111MODULE: on

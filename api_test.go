@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
+	"gg-scm.io/pkg/git/object"
 )
 
 func TestCommandError(t *testing.T) {
@@ -205,7 +206,7 @@ func TestNullTreeHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Hash{0x4b, 0x82, 0x5d, 0xc6, 0x42, 0xcb, 0x6e, 0xb9, 0xa0, 0x60, 0xe5, 0x4b, 0xf8, 0xd6, 0x92, 0x88, 0xfb, 0xee, 0x49, 0x04}
+	want := object.Tree(nil).SHA1()
 	if got != want {
 		t.Errorf("env.g.NullTreeHash(ctx) = %v; want %v", got, want)
 	}

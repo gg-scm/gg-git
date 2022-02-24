@@ -23,101 +23,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestRef(t *testing.T) {
-	tests := []struct {
-		ref      Ref
-		invalid  bool
-		isBranch bool
-		branch   string
-		isTag    bool
-		tag      string
-	}{
-		{
-			ref:     "",
-			invalid: true,
-		},
-		{
-			ref:     "-",
-			invalid: true,
-		},
-		{ref: "main"},
-		{ref: "HEAD"},
-		{ref: "FETCH_HEAD"},
-		{ref: "ORIG_HEAD"},
-		{ref: "MERGE_HEAD"},
-		{ref: "CHERRY_PICK_HEAD"},
-		{ref: "FOO"},
-		{
-			ref:     "-refs/heads/main",
-			invalid: true,
-		},
-		{
-			ref:      "refs/heads/main",
-			isBranch: true,
-			branch:   "main",
-		},
-		{
-			ref:     "refs/heads//main",
-			invalid: true,
-		},
-		{
-			ref:     "refs/heads/foo.",
-			invalid: true,
-		},
-		{
-			ref:      "refs/heads/foo.bar",
-			isBranch: true,
-			branch:   "foo.bar",
-		},
-		{
-			ref:     "refs/heads/foo..bar",
-			invalid: true,
-		},
-		{
-			ref:     "refs/heads/main:bar",
-			invalid: true,
-		},
-		{
-			ref:     "refs/heads/foo bar",
-			invalid: true,
-		},
-		{
-			ref:     "refs/heads/foo~bar",
-			invalid: true,
-		},
-		{
-			ref:     "refs/heads/foo^bar",
-			invalid: true,
-		},
-		{
-			ref:   "refs/tags/v1.2.3",
-			isTag: true,
-			tag:   "v1.2.3",
-		},
-		{ref: "refs/for/main"},
-	}
-	for _, test := range tests {
-		if got := test.ref.String(); got != string(test.ref) {
-			t.Errorf("Ref(%q).String() = %q; want %q", string(test.ref), got, string(test.ref))
-		}
-		if got := test.ref.IsValid(); got != !test.invalid {
-			t.Errorf("Ref(%q).IsValid() = %t; want %t", string(test.ref), got, !test.invalid)
-		}
-		if got := test.ref.IsBranch(); got != test.isBranch {
-			t.Errorf("Ref(%q).IsBranch() = %t; want %t", string(test.ref), got, test.isBranch)
-		}
-		if got := test.ref.Branch(); got != test.branch {
-			t.Errorf("Ref(%q).Branch() = %s; want %s", string(test.ref), got, test.branch)
-		}
-		if got := test.ref.IsTag(); got != test.isTag {
-			t.Errorf("Ref(%q).IsTag() = %t; want %t", string(test.ref), got, test.isTag)
-		}
-		if got := test.ref.Tag(); got != test.tag {
-			t.Errorf("Ref(%q).Tag() = %s; want %s", string(test.ref), got, test.tag)
-		}
-	}
-}
-
 func TestHeadRef(t *testing.T) {
 	gitPath, err := findGit()
 	if err != nil {
@@ -331,6 +236,43 @@ func TestParseRev(t *testing.T) {
 	}
 }
 
+func BenchmarkParseRev(b *testing.B) {
+	gitPath, err := findGit()
+	if err != nil {
+		b.Skip("git not found:", err)
+	}
+	ctx := context.Background()
+	env, err := newTestEnv(ctx, gitPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer env.cleanup()
+
+	repoPath := env.root.FromSlash("repo")
+	if err := env.g.Init(ctx, repoPath); err != nil {
+		b.Fatal(err)
+	}
+	g := env.g.WithDir(repoPath)
+
+	const fileName = "foo.txt"
+	if err := env.root.Apply(filesystem.Write("repo/foo.txt", "Hello, World!\n")); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.Run(ctx, "add", fileName); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.Run(ctx, "commit", "-m", "first commit"); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := g.ParseRev(ctx, "HEAD"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestListRefs(t *testing.T) {
 	gitPath, err := findGit()
 	if err != nil {
@@ -491,6 +433,83 @@ func TestMutateRefs(t *testing.T) {
 		return nil
 	}
 
+	t.Run("SetRef/NotExists", func(t *testing.T) {
+		env, err := newTestEnv(ctx, gitPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer env.cleanup()
+		if err := setupRepo(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		foo, err := env.g.ParseRev(ctx, "refs/heads/foo")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create the branch with MutateRefs.
+		muts := map[Ref]RefMutation{"refs/heads/bar": SetRef(foo.Commit.String())}
+		if err := env.g.MutateRefs(ctx, muts); err != nil {
+			t.Errorf("MutateRefs(ctx, %v): %v", muts, err)
+		}
+
+		// Verify that "refs/heads/bar" points to the same object as "refs/heads/foo".
+		if r, err := env.g.ParseRev(ctx, "refs/heads/bar"); err != nil {
+			t.Error(err)
+		} else if r.Commit != foo.Commit {
+			t.Errorf("refs/heads/bar = %v; want %v", r.Commit, foo.Commit)
+		}
+	})
+
+	t.Run("CreateRef/DoesNotExist", func(t *testing.T) {
+		env, err := newTestEnv(ctx, gitPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer env.cleanup()
+		if err := setupRepo(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		foo, err := env.g.ParseRev(ctx, "refs/heads/foo")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create the branch with MutateRefs.
+		muts := map[Ref]RefMutation{"refs/heads/bar": CreateRef(foo.Commit.String())}
+		if err := env.g.MutateRefs(ctx, muts); err != nil {
+			t.Errorf("MutateRefs(ctx, %v): %v", muts, err)
+		}
+
+		// Verify that "refs/heads/bar" points to the same object as "refs/heads/foo".
+		if r, err := env.g.ParseRev(ctx, "refs/heads/bar"); err != nil {
+			t.Error(err)
+		} else if r.Commit != foo.Commit {
+			t.Errorf("refs/heads/bar = %v; want %v", r.Commit, foo.Commit)
+		}
+	})
+
+	t.Run("CreatRef/Exists", func(t *testing.T) {
+		env, err := newTestEnv(ctx, gitPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer env.cleanup()
+		if err := setupRepo(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		foo, err := env.g.ParseRev(ctx, "refs/heads/foo")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Attempt to create the branch with MutateRefs.
+		muts := map[Ref]RefMutation{"refs/heads/foo": CreateRef(foo.Commit.String())}
+		if err := env.g.MutateRefs(ctx, muts); err == nil {
+			t.Errorf("MutateRefs(ctx, %v) did not return error", muts)
+		}
+	})
+
 	t.Run("DeleteRef", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
@@ -512,6 +531,29 @@ func TestMutateRefs(t *testing.T) {
 			t.Errorf("refs/heads/foo = %v; should not exist", r.Commit)
 		}
 	})
+
+	t.Run("DeleteRef/DoesNotExist", func(t *testing.T) {
+		env, err := newTestEnv(ctx, gitPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer env.cleanup()
+		if err := setupRepo(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+
+		// Delete a non-existent branch "bar" with MutateRefs.
+		muts := map[Ref]RefMutation{"refs/heads/bar": DeleteRef()}
+		if err := env.g.MutateRefs(ctx, muts); err != nil {
+			t.Errorf("MutateRefs(ctx, %v): %v", muts, err)
+		}
+
+		// Verify that "refs/heads/bar" still does not exist.
+		if r, err := env.g.ParseRev(ctx, "refs/heads/bar"); err == nil {
+			t.Errorf("refs/heads/bar = %v; should not exist", r.Commit)
+		}
+	})
+
 	t.Run("DeleteRefIfMatches/Match", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
@@ -537,6 +579,7 @@ func TestMutateRefs(t *testing.T) {
 			t.Errorf("refs/heads/foo = %v; should not exist", r.Commit)
 		}
 	})
+
 	t.Run("DeleteRefIfMatches/NoMatch", func(t *testing.T) {
 		env, err := newTestEnv(ctx, gitPath)
 		if err != nil {
