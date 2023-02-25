@@ -14,9 +14,11 @@
 
 module gg-scm.io/pkg/git
 
-go 1.14
+go 1.19
 
 require (
 	github.com/google/go-cmp v0.5.4
 	golang.org/x/sys v0.0.0-20180329131831-378d26f46672
 )
+
+require golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543 // indirect
