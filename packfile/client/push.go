@@ -64,7 +64,9 @@ func (r *Remote) StartPush(ctx context.Context) (_ *PushStream, err error) {
 	}
 	var refs map[githash.Ref]*Ref
 	if ref0 != nil {
-		refs[ref0.Name] = ref0
+		refs = map[githash.Ref]*Ref{
+			ref0.Name: ref0,
+		}
 		if err := readOtherRefsV1(refs, caps.symrefs(), connReader); err != nil {
 			return nil, fmt.Errorf("push %s: %w", r.urlstr, err)
 		}
