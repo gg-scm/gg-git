@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][]
 
+### Added
+
+- New methods `Git.IterateRefs` and `Git.IterateRemoteRefs`
+  provide a streaming API for listing refs.
+
+### Deprecated
+
+- `Git.ListRefs` and `Git.ListRefsVerbatim` are deprecated
+  in favor of `Git.IterateRefs`.
+- `Git.ListRemoteRefs` is deprecated in favor of `Git.IterateRemoteRefs`.
+
 ### Fixed
 
 - `Log` no longer retains data after closing.

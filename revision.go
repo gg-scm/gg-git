@@ -15,10 +15,12 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"gg-scm.io/pkg/git/githash"
@@ -123,74 +125,234 @@ func (g *Git) ParseRev(ctx context.Context, refspec string) (*Rev, error) {
 }
 
 // ListRefs lists all of the refs in the repository with tags dereferenced.
+//
+// Deprecated: This method will return an error on repositories with many branches (>100K).
+// Use [Git.IterateRefs] instead.
 func (g *Git) ListRefs(ctx context.Context) (map[Ref]Hash, error) {
-	const errPrefix = "git show-ref"
-	out, err := g.output(ctx, errPrefix, []string{"show-ref", "--dereference", "--head"})
-	if err != nil {
-		if exitCode(err) == 1 && len(out) == 0 {
-			return nil, nil
-		}
-		return nil, err
-	}
-	refs, err := parseRefs(out, false)
-	if err != nil {
-		return refs, fmt.Errorf("%s: %w", errPrefix, err)
-	}
-	return refs, nil
+	return parseRefs(g.IterateRefs(ctx, IterateRefsOptions{
+		IncludeHead:     true,
+		DereferenceTags: true,
+	}))
 }
 
-// ListRefsVerbatim lists all of the refs in the repository. Tags will not be
-// dereferenced.
+// ListRefsVerbatim lists all of the refs in the repository.
+// Tags will not be dereferenced.
+//
+// Deprecated: This method will return an error on repositories with many branches (>100K).
+// Use [Git.IterateRefs] instead.
 func (g *Git) ListRefsVerbatim(ctx context.Context) (map[Ref]Hash, error) {
-	const errPrefix = "git show-ref"
-	out, err := g.output(ctx, errPrefix, []string{"show-ref", "--head"})
-	if err != nil {
-		return nil, err
-	}
-	refs, err := parseRefs(out, true)
-	if err != nil {
-		return refs, fmt.Errorf("%s: %w", errPrefix, err)
-	}
-	return refs, nil
+	return parseRefs(g.IterateRefs(ctx, IterateRefsOptions{
+		IncludeHead: true,
+	}))
 }
 
-func parseRefs(out string, ignoreDerefs bool) (map[Ref]Hash, error) {
+func parseRefs(iter *RefIterator) (map[Ref]Hash, error) {
+	defer iter.Close()
+
+	const maxCount = 164000 // approximately 10 MiB, assuming 64 bytes per record
+
 	refs := make(map[Ref]Hash)
 	tags := make(map[Ref]bool)
-	isSpace := func(c rune) bool { return c == ' ' || c == '\t' }
-	for len(out) > 0 {
-		eol := strings.IndexByte(out, '\n')
-		if eol == -1 {
-			return refs, errors.New("parse refs: unexpected EOF")
-		}
-		line := out[:eol]
-		out = out[eol+1:]
-
-		sp := strings.IndexFunc(line, isSpace)
-		if sp == -1 {
-			return refs, fmt.Errorf("parse refs: could not parse line %q", line)
-		}
-		h, err := ParseHash(line[:sp])
-		if err != nil {
-			return refs, fmt.Errorf("parse refs: hash of ref %q: %w", line[sp+1:], err)
-		}
-		ref := Ref(strings.TrimLeftFunc(line[sp+1:], isSpace))
-		if strings.HasSuffix(string(ref), "^{}") {
+	for iter.Next() {
+		if iter.IsDereference() {
 			// Dereferenced tag. This takes precedence over the previous hash stored in the map.
-			if ignoreDerefs {
-				continue
+			if tags[iter.Ref()] {
+				return refs, fmt.Errorf("parse refs: multiple hashes found for tag %v", iter.Ref())
 			}
-			ref = ref[:len(ref)-3]
-			if tags[ref] {
-				return refs, fmt.Errorf("parse refs: multiple hashes found for tag %v", ref)
-			}
-			tags[ref] = true
-		} else if _, exists := refs[ref]; exists {
-			return refs, fmt.Errorf("parse refs: multiple hashes found for %v", ref)
+			tags[iter.Ref()] = true
+		} else if _, exists := refs[iter.Ref()]; exists {
+			return refs, fmt.Errorf("parse refs: multiple hashes found for %v", iter.Ref())
+		} else if len(refs) >= maxCount {
+			return refs, fmt.Errorf("parse refs: too many refs")
 		}
-		refs[ref] = h
+		refs[iter.Ref()] = iter.ObjectSHA1()
 	}
-	return refs, nil
+	return refs, iter.Close()
+}
+
+// IterateRefsOptions specifies filters for [Git.IterateRefs].
+type IterateRefsOptions struct {
+	// If IncludeHead is true, the HEAD ref is included.
+	IncludeHead bool
+	// LimitToBranches limits the refs to those starting with "refs/heads/".
+	// This is additive with IncludeHead and LimitToTags.
+	LimitToBranches bool
+	// LimitToTags limits the refs to those starting with "refs/tags/".
+	// This is additive with IncludeHead and LimitToBranches.
+	LimitToTags bool
+	// If DereferenceTags is true,
+	// then the iterator will also produce refs for which [RefIterator.IsDereference] reports true
+	// that have the object hash of the tag object refers to.
+	DereferenceTags bool
+}
+
+// IterateRefs starts listing all of the refs in the repository.
+func (g *Git) IterateRefs(ctx context.Context, opts IterateRefsOptions) *RefIterator {
+	const errPrefix = "git show-ref"
+	args := []string{"show-ref"}
+	if opts.IncludeHead {
+		args = append(args, "--head")
+	}
+	if opts.LimitToBranches {
+		args = append(args, "--heads")
+	}
+	if opts.LimitToTags {
+		args = append(args, "--tags")
+	}
+	if opts.DereferenceTags {
+		args = append(args, "--dereference")
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	stderr := new(bytes.Buffer)
+	pipe, err := StartPipe(ctx, g.runner, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Stderr: &limitWriter{w: stderr, n: errorOutputLimit},
+	})
+	if err != nil {
+		cancel()
+		return &RefIterator{
+			scanErr:  fmt.Errorf("%s: %w", errPrefix, err),
+			scanDone: true,
+		}
+	}
+	return &RefIterator{
+		scanner:      bufio.NewScanner(pipe),
+		stderr:       stderr,
+		cancelFunc:   cancel,
+		closer:       pipe,
+		errPrefix:    errPrefix,
+		ignoreDerefs: !opts.DereferenceTags,
+		ignoreHead:   !opts.IncludeHead,
+		ignoreExit1:  true,
+	}
+}
+
+// RefIterator is an open handle to a Git subprocess that lists refs.
+// Closing the iterator stops the subprocess.
+type RefIterator struct {
+	scanner      *bufio.Scanner
+	stderr       *bytes.Buffer
+	cancelFunc   context.CancelFunc
+	closer       io.Closer
+	errPrefix    string
+	ignoreDerefs bool
+	ignoreHead   bool
+	ignoreExit1  bool
+
+	scanErr    error
+	scanDone   bool
+	hasResults bool
+	ref        Ref
+	hash       githash.SHA1
+	deref      bool
+}
+
+// Next attempts to scan the next ref and reports whether one exists.
+func (iter *RefIterator) Next() bool {
+	if iter.scanDone {
+		return false
+	}
+	err := iter.next()
+	if err != nil {
+		iter.cancel()
+		iter.scanErr = err
+		if errors.Is(err, io.EOF) {
+			iter.scanErr = nil
+		}
+		return false
+	}
+	iter.hasResults = true
+	return true
+}
+
+func (iter *RefIterator) next() error {
+	isSpace := func(c rune) bool { return c == ' ' || c == '\t' }
+
+	for iter.scanner.Scan() {
+		line := iter.scanner.Bytes()
+		sp := bytes.IndexAny(line, " \t")
+		if sp == -1 {
+			return fmt.Errorf("parse refs: could not parse line %q", line)
+		}
+		refBytes := bytes.TrimLeftFunc(line[sp+1:], isSpace)
+		const derefSuffix = "^{}"
+		iter.deref = len(refBytes) >= len(derefSuffix) &&
+			string(refBytes[len(refBytes)-len(derefSuffix):]) == derefSuffix
+		if iter.deref {
+			refBytes = refBytes[:len(refBytes)-len(derefSuffix)]
+		}
+		ref := Ref(refBytes)
+		if (!iter.deref || !iter.ignoreDerefs) && (ref != Head || !iter.ignoreHead) {
+			if err := iter.hash.UnmarshalText(line[:sp]); err != nil {
+				return fmt.Errorf("parse refs: hash of ref %q: %w", line[sp+1:], err)
+			}
+			iter.ref = ref
+			return nil
+		}
+	}
+
+	if err := iter.scanner.Err(); err != nil {
+		return err
+	}
+	// Reached successful end. Wait for subprocess to exit.
+	if err := iter.close(); err != nil {
+		return err
+	}
+	return io.EOF
+}
+
+// Ref returns the current ref.
+// [RefIterator.Next] must be called at least once before calling Ref.
+func (iter *RefIterator) Ref() Ref {
+	return iter.ref
+}
+
+// ObjectSHA1 returns the SHA-1 hash of the Git object
+// the current ref refers to.
+// [RefIterator.Next] must be called at least once before calling ObjectSHA1.
+func (iter *RefIterator) ObjectSHA1() githash.SHA1 {
+	return iter.hash
+}
+
+// IsDereference reports whether the value of [RefIterator.ObjectSHA1]
+// represents the target of a tag object.
+func (iter *RefIterator) IsDereference() bool {
+	return iter.deref
+}
+
+// Close ends the Git subprocess and waits for it to finish.
+// Close returns an error if [RefIterator.Next] returned false
+// due to a parse failure.
+// Subsequent calls to Close will no-op and return the same error.
+func (iter *RefIterator) Close() error {
+	iter.cancel()
+	iter.close() // Ignore error, since it's from interrupting.
+	return iter.scanErr
+}
+
+func (iter *RefIterator) cancel() {
+	if iter.cancelFunc != nil {
+		iter.cancelFunc()
+	}
+	iter.scanner = nil
+	iter.scanDone = true
+	iter.ref = ""
+	iter.hash = Hash{}
+	iter.deref = false
+}
+
+func (iter *RefIterator) close() error {
+	if iter.closer == nil {
+		return nil
+	}
+	err := iter.closer.Close()
+	iter.closer = nil
+	if err != nil && !(iter.ignoreExit1 && !iter.hasResults && exitCode(err) == 1) {
+		return commandError(iter.errPrefix, err, iter.stderr.Bytes())
+	}
+	return nil
 }
 
 // A RefMutation describes an operation to perform on a ref. The zero value is

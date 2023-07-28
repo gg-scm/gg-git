@@ -15,6 +15,8 @@
 package git
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -107,27 +109,79 @@ func (g *Git) clone(ctx context.Context, mode string, u *url.URL, opts CloneOpti
 	})
 }
 
+// IterateRemoteRefsOptions specifies filters for [Git.IterateRemoteRefs].
+type IterateRemoteRefsOptions struct {
+	// If IncludeHead is true, the HEAD ref is included.
+	IncludeHead bool
+	// LimitToBranches limits the refs to those starting with "refs/heads/".
+	// This is additive with IncludeHead and LimitToTags.
+	LimitToBranches bool
+	// LimitToTags limits the refs to those starting with "refs/tags/".
+	// This is additive with IncludeHead and LimitToBranches.
+	LimitToTags bool
+	// If DereferenceTags is true,
+	// then the iterator will also produce refs for which [RefIterator.IsDereference] reports true
+	// that have the object hash of the tag object refers to.
+	DereferenceTags bool
+}
+
 // ListRemoteRefs lists all of the refs in a remote repository.
 // remote may be a URL or the name of a remote.
 //
 // This function may block on user input if the remote requires
 // credentials.
+//
+// Deprecated: This method will return an error on repositories with many branches (>100K).
+// Use [Git.IterateRemoteRefs] instead.
 func (g *Git) ListRemoteRefs(ctx context.Context, remote string) (map[Ref]Hash, error) {
+	return parseRefs(g.IterateRemoteRefs(ctx, remote, IterateRemoteRefsOptions{
+		IncludeHead: true,
+	}))
+}
+
+// IterateRemoteRefs starts listing all of the refs in a remote repository.
+// remote may be a URL or the name of a remote.
+//
+// The iterator may block on user input if the remote requires credentials.
+func (g *Git) IterateRemoteRefs(ctx context.Context, remote string, opts IterateRemoteRefsOptions) *RefIterator {
 	// TODO(someday): Add tests.
 
 	errPrefix := fmt.Sprintf("git ls-remote %q", remote)
-	out, err := g.output(ctx, errPrefix, []string{"ls-remote", "--quiet", "--", remote})
+	args := []string{"ls-remote", "--quiet"}
+	if !opts.IncludeHead && !opts.DereferenceTags {
+		args = append(args, "--refs")
+	}
+	if opts.LimitToBranches {
+		args = append(args, "--heads")
+	}
+	if opts.LimitToTags {
+		args = append(args, "--tags")
+	}
+	args = append(args, "--", remote)
+
+	ctx, cancel := context.WithCancel(ctx)
+	stderr := new(bytes.Buffer)
+	pipe, err := StartPipe(ctx, g.runner, &Invocation{
+		Args:   args,
+		Dir:    g.dir,
+		Stderr: &limitWriter{w: stderr, n: errorOutputLimit},
+	})
 	if err != nil {
-		return nil, err
+		cancel()
+		return &RefIterator{
+			scanErr:  fmt.Errorf("%s: %w", errPrefix, err),
+			scanDone: true,
+		}
 	}
-	if len(out) == 0 {
-		return nil, nil
+	return &RefIterator{
+		scanner:      bufio.NewScanner(pipe),
+		stderr:       stderr,
+		cancelFunc:   cancel,
+		closer:       pipe,
+		errPrefix:    errPrefix,
+		ignoreDerefs: !opts.DereferenceTags,
+		ignoreHead:   !opts.IncludeHead,
 	}
-	refs, err := parseRefs(out, true)
-	if err != nil {
-		return refs, fmt.Errorf("%s: %w", errPrefix, err)
-	}
-	return refs, nil
 }
 
 // A FetchRefspec specifies a mapping from remote refs to local refs.
