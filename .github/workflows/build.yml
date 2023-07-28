@@ -38,7 +38,7 @@ jobs:
       uses: cachix/install-nix-action@v22
     - name: Run tests
       run: |
-        git_attr="$(echo "$GIT_VERSION" | sed -e 's/\./_/g')"
+        git_attr="git_$(echo "$GIT_VERSION" | sed -e 's/\./_/g')"
         nix shell ".#$git_attr" '.#go' --command \
           go test \
             -mod=readonly \
@@ -58,7 +58,7 @@ jobs:
       uses: cachix/install-nix-action@v22
     - name: Run tests
       run: |
-        git_attr="$(echo "$GIT_VERSION" | sed -e 's/\./_/g')"
+        git_attr="git_$(echo "$GIT_VERSION" | sed -e 's/\./_/g')"
         nix shell ".#$git_attr" '.#go' --command \
           go test \
             -mod=readonly \
