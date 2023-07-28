@@ -38,6 +38,8 @@
       let
         pkgs = import nixpkgs { inherit system; };
       in {
+        packages.go = pkgs.go_1_20;
+
         packages.git = pkgs.git;
 
         packages.git_2_17_1 = self.lib.buildGit {
@@ -79,16 +81,14 @@
             outputs = [ "out" ];
           });
 
-        devShells.default = self.lib.mkShell { inherit pkgs; };
+        devShells.default = pkgs.mkShell {
+          packages = [
+            self.packages.${system}.go
+            pkgs.git
+          ];
+        };
       }
     ) // {
-      lib.mkShell = { pkgs, git ? pkgs.git }: pkgs.mkShell {
-        packages = [
-          pkgs.go_1_20
-          git
-        ];
-      };
-
       lib.buildGit = { pkgs, packagePath, args ? {} }:
         let
           defaultArgs = {
