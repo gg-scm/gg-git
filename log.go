@@ -153,10 +153,10 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (_ *Log, err error) {
 	}
 
 	return &Log{
-		r:      bufio.NewReaderSize(catFilePipe, 1<<20 /* 1 MiB */),
-		stderr: stderr,
-		cancel: cancel,
-		hash:   sha1.New(),
+		r:          bufio.NewReaderSize(catFilePipe, 1<<20 /* 1 MiB */),
+		stderr:     stderr,
+		cancelFunc: cancel,
+		hash:       sha1.New(),
 		closers: [...]io.Closer{
 			pipeStreamCloser{catFilePipe, catFileStderr},
 			pipeStreamCloser{revListPipe, revListStderr},
@@ -167,11 +167,11 @@ func (g *Git) Log(ctx context.Context, opts LogOptions) (_ *Log, err error) {
 // Log is an open handle to a `git cat-file --batch` subprocess. Closing the Log
 // stops the subprocess.
 type Log struct {
-	r       *bufio.Reader
-	stderr  *bytes.Buffer
-	hash    hash.Hash
-	cancel  context.CancelFunc
-	closers [2]io.Closer
+	r          *bufio.Reader
+	stderr     *bytes.Buffer
+	hash       hash.Hash
+	cancelFunc context.CancelFunc
+	closers    [2]io.Closer
 
 	scanErr  error
 	scanDone bool
@@ -185,14 +185,11 @@ func (l *Log) Next() bool {
 	}
 	err := l.next()
 	if err != nil {
-		l.r = nil
+		l.cancel()
 		l.scanErr = err
 		if errors.Is(err, io.EOF) {
 			l.scanErr = nil
 		}
-		l.scanDone = true
-		l.info = nil
-		l.cancel()
 		return false
 	}
 	return true
@@ -268,12 +265,19 @@ func (l *Log) CommitInfo() *object.Commit {
 }
 
 // Close ends the log subprocess and waits for it to finish.
-// Close returns an error if Next returned false due to a parse failure.
+// Close returns an error if [Log.Next] returned false due to a parse failure.
+// Subsequent calls to Close will no-op and return the same error.
 func (l *Log) Close() error {
 	l.cancel()
-	l.close()         // Ignore error, since it's from interrupting.
-	l.scanDone = true // Bail early for future calls to Next.
+	l.close() // Ignore error, since it's from interrupting.
 	return l.scanErr
+}
+
+func (l *Log) cancel() {
+	l.cancelFunc()
+	l.r = nil
+	l.scanDone = true
+	l.info = nil
 }
 
 func (l *Log) close() error {
