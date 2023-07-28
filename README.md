@@ -53,10 +53,8 @@ but are not supported.
 
 ## Support
 
-If you need help, check out the [gg Discord][]. If you've found an issue,
-file it on the [issue tracker][].
+If you've found an issue, file it on the [issue tracker][].
 
-[gg Discord]: https://discord.gg/2hkE3yj7y6
 [issue tracker]: https://github.com/gg-scm/gg-git/issues
 
 ## Motivation
@@ -116,7 +114,6 @@ the author and maintainer.
 
 ## Links
 
--  [gg Discord](https://discord.gg/2hkE3yj7y6)
 -  [gg website](https://gg-scm.io/)
 -  [Sponsor](https://github.com/sponsors/zombiezen)
 
