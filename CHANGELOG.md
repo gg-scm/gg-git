@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `Log` no longer retains data after closing.
+- Fixed a panic in `packfile/client.Remote.StartPush`.
 
 ## [0.10.0][] - 2022-02-22
 
