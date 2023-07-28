@@ -44,6 +44,10 @@ func TestExitCode(t *testing.T) {
 			err:  errors.New("bork"),
 			want: -1,
 		},
+		{
+			err:  nil,
+			want: 0,
+		},
 	}
 	for _, test := range tests {
 		if got := exitCode(test.err); got != test.want {

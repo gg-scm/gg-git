@@ -16,9 +16,13 @@ package git
 
 import "errors"
 
-// exitCode returns the exit code indicated by the error, or -1 if the error
-// doesn't indicate an exited process.
+// exitCode returns the exit code indicated by the error,
+// zero if the error is nil,
+// or -1 if the error doesn't indicate an exited process.
 func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
 	var coder interface {
 		ExitCode() int
 	}
