@@ -3,9 +3,13 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.10.0...main
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.11.0...main
 
-## [Unreleased][]
+## [0.11.0][] - 2023-08-01
+
+Version 0.11 adds an iteration API for refs.
+
+[0.11.0]: https://github.com/gg-scm/gg-git/releases/tag/v0.11.0
 
 ### Added
 
