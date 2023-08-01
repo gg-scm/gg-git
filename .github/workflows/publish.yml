@@ -26,7 +26,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: "1.20"
+        go-version: "1.19"
     - name: Fetch release from proxy
       run: go get -d gg-scm.io/pkg/git@"$(echo "$GITHUB_REF" | sed -e 's:^refs/tags/::')"
       env:

@@ -38,7 +38,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
       in {
-        packages.go = pkgs.go_1_20;
+        packages.go = pkgs.go_1_19;
 
         packages.git = pkgs.git;
 
