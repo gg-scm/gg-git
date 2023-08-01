@@ -111,7 +111,8 @@ func (g *Git) clone(ctx context.Context, mode string, u *url.URL, opts CloneOpti
 
 // IterateRemoteRefsOptions specifies filters for [Git.IterateRemoteRefs].
 type IterateRemoteRefsOptions struct {
-	// If IncludeHead is true, the HEAD ref is included.
+	// If IncludeHead is true, the HEAD ref is included,
+	// regardless of the other options.
 	IncludeHead bool
 	// LimitToBranches limits the refs to those starting with "refs/heads/".
 	// This is additive with IncludeHead and LimitToTags.
@@ -151,10 +152,10 @@ func (g *Git) IterateRemoteRefs(ctx context.Context, remote string, opts Iterate
 	if !opts.IncludeHead && !opts.DereferenceTags {
 		args = append(args, "--refs")
 	}
-	if opts.LimitToBranches {
+	if opts.LimitToBranches && !opts.IncludeHead {
 		args = append(args, "--heads")
 	}
-	if opts.LimitToTags {
+	if opts.LimitToTags && !opts.IncludeHead {
 		args = append(args, "--tags")
 	}
 	args = append(args, "--", remote)
@@ -174,13 +175,12 @@ func (g *Git) IterateRemoteRefs(ctx context.Context, remote string, opts Iterate
 		}
 	}
 	return &RefIterator{
-		scanner:      bufio.NewScanner(pipe),
-		stderr:       stderr,
-		cancelFunc:   cancel,
-		closer:       pipe,
-		errPrefix:    errPrefix,
-		ignoreDerefs: !opts.DereferenceTags,
-		ignoreHead:   !opts.IncludeHead,
+		scanner:    bufio.NewScanner(pipe),
+		stderr:     stderr,
+		cancelFunc: cancel,
+		closer:     pipe,
+		errPrefix:  errPrefix,
+		opts:       IterateRefsOptions(opts),
 	}
 }
 

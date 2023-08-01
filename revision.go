@@ -172,7 +172,8 @@ func parseRefs(iter *RefIterator) (map[Ref]Hash, error) {
 
 // IterateRefsOptions specifies filters for [Git.IterateRefs].
 type IterateRefsOptions struct {
-	// If IncludeHead is true, the HEAD ref is included.
+	// If IncludeHead is true, the HEAD ref is included
+	// regardless of the other options.
 	IncludeHead bool
 	// LimitToBranches limits the refs to those starting with "refs/heads/".
 	// This is additive with IncludeHead and LimitToTags.
@@ -184,6 +185,17 @@ type IterateRefsOptions struct {
 	// then the iterator will also produce refs for which [RefIterator.IsDereference] reports true
 	// that have the object hash of the tag object refers to.
 	DereferenceTags bool
+}
+
+func (opts IterateRefsOptions) filter(ref []byte, deref bool) bool {
+	if (Ref(ref) == Head && !opts.IncludeHead) || (deref && !opts.DereferenceTags) {
+		return false
+	}
+	if opts.LimitToBranches || opts.LimitToTags {
+		return (bytesHasPrefix(ref, "refs/heads/") && opts.LimitToBranches) ||
+			(bytesHasPrefix(ref, "refs/tags/") && opts.LimitToTags)
+	}
+	return true
 }
 
 // IterateRefs starts listing all of the refs in the repository.
@@ -218,28 +230,26 @@ func (g *Git) IterateRefs(ctx context.Context, opts IterateRefsOptions) *RefIter
 		}
 	}
 	return &RefIterator{
-		scanner:      bufio.NewScanner(pipe),
-		stderr:       stderr,
-		cancelFunc:   cancel,
-		closer:       pipe,
-		errPrefix:    errPrefix,
-		ignoreDerefs: !opts.DereferenceTags,
-		ignoreHead:   !opts.IncludeHead,
-		ignoreExit1:  true,
+		scanner:     bufio.NewScanner(pipe),
+		stderr:      stderr,
+		cancelFunc:  cancel,
+		closer:      pipe,
+		errPrefix:   errPrefix,
+		opts:        opts,
+		ignoreExit1: true,
 	}
 }
 
 // RefIterator is an open handle to a Git subprocess that lists refs.
 // Closing the iterator stops the subprocess.
 type RefIterator struct {
-	scanner      *bufio.Scanner
-	stderr       *bytes.Buffer
-	cancelFunc   context.CancelFunc
-	closer       io.Closer
-	errPrefix    string
-	ignoreDerefs bool
-	ignoreHead   bool
-	ignoreExit1  bool
+	scanner     *bufio.Scanner
+	stderr      *bytes.Buffer
+	cancelFunc  context.CancelFunc
+	closer      io.Closer
+	errPrefix   string
+	opts        IterateRefsOptions
+	ignoreExit1 bool
 
 	scanErr    error
 	scanDone   bool
@@ -283,12 +293,11 @@ func (iter *RefIterator) next() error {
 		if iter.deref {
 			refBytes = refBytes[:len(refBytes)-len(derefSuffix)]
 		}
-		ref := Ref(refBytes)
-		if (!iter.deref || !iter.ignoreDerefs) && (ref != Head || !iter.ignoreHead) {
+		if iter.opts.filter(refBytes, iter.deref) {
 			if err := iter.hash.UnmarshalText(line[:sp]); err != nil {
-				return fmt.Errorf("parse refs: hash of ref %q: %w", line[sp+1:], err)
+				return fmt.Errorf("parse refs: hash of ref %q: %w", iter.ref, err)
 			}
-			iter.ref = ref
+			iter.ref = Ref(refBytes)
 			return nil
 		}
 	}
@@ -509,4 +518,9 @@ func (r *Rev) String() string {
 		return r.Ref.String()
 	}
 	return r.Commit.String()
+}
+
+func bytesHasPrefix(b []byte, prefix string) bool {
+	// gc compiler will not allocate the string.
+	return len(b) > len(prefix) && string(b[:len(prefix)]) == prefix
 }
