@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - New methods `Git.IterateRefs` and `Git.IterateRemoteRefs`
   provide a streaming API for listing refs.
+- Package `gitglob` implements the extended glob pattern matching found in Git.
 
 ### Deprecated
 
