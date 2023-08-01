@@ -22,12 +22,8 @@ jobs:
   go-get:
     name: go get
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: "1.19"
-    - name: Fetch release from proxy
-      run: go get -d gg-scm.io/pkg/git@"$(echo "$GITHUB_REF" | sed -e 's:^refs/tags/::')"
-      env:
-        GO111MODULE: on
+      - name: Fetch release from proxy
+        run: |
+          curl -fsSL "https://proxy.golang.org/gg-scm.io/pkg/git/@v/$(echo "$GITHUB_REF" | sed -e 's:^refs/tags/::').info"
