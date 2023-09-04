@@ -35,7 +35,7 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v3
     - name: Install Nix
-      uses: cachix/install-nix-action@v22
+      uses: cachix/install-nix-action@v23
     - name: Run tests
       run: |
         git_attr="git_$(echo "$GIT_VERSION" | sed -e 's/\./_/g')"
@@ -55,7 +55,7 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v3
     - name: Install Nix
-      uses: cachix/install-nix-action@v22
+      uses: cachix/install-nix-action@v23
     - name: Run tests
       run: |
         git_attr="git_$(echo "$GIT_VERSION" | sed -e 's/\./_/g')"
