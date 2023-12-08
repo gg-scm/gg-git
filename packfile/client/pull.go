@@ -47,6 +47,11 @@ type puller interface {
 // The Context is used for the entire pull stream. The caller is responsible
 // for calling Close on the returned PullStream.
 func (r *Remote) StartPull(ctx context.Context) (_ *PullStream, err error) {
+	p := &PullStream{
+		ctx:    ctx,
+		urlstr: r.urlstr,
+	}
+
 	resp, err := r.impl.advertiseRefs(ctx, r.pullExtraParams)
 	if err != nil {
 		return nil, fmt.Errorf("pull %s: %w", r.urlstr, err)
@@ -54,14 +59,16 @@ func (r *Remote) StartPull(ctx context.Context) (_ *PullStream, err error) {
 	// Not deferring resp.Close because V1 needs to retain resp.
 	respReader := pktline.NewReader(resp)
 	respReader.Next()
+	if respReader.Type() == pktline.Flush {
+		// Old versions of Git (~2.17) will only send a flush packet on an empty repository.
+		resp.Close()
+		p.impl = emptyPuller{}
+		return p, nil
+	}
 	line, err := respReader.Text()
 	if err != nil {
 		resp.Close()
 		return nil, fmt.Errorf("pull %s: %w", r.urlstr, err)
-	}
-	p := &PullStream{
-		ctx:    ctx,
-		urlstr: r.urlstr,
 	}
 	if bytes.Equal(line, []byte(version2Line)) {
 		caps, err := parseCapabilityAdvertisementV2(respReader)
@@ -473,4 +480,21 @@ func (caps capabilityList) MarshalText() ([]byte, error) {
 func (caps capabilityList) String() string {
 	text, _ := caps.MarshalText()
 	return string(text)
+}
+
+type emptyPuller struct{}
+
+func (emptyPuller) negotiate(ctx context.Context, errPrefix string, req *PullRequest) (*PullResponse, error) {
+	return nil, fmt.Errorf("pull data is empty")
+}
+
+func (emptyPuller) listRefs(ctx context.Context, refPrefixes []string) (map[githash.Ref]*Ref, error) {
+	return nil, nil
+}
+
+func (emptyPuller) capabilities() PullCapabilities {
+	return 0
+}
+func (emptyPuller) Close() error {
+	return nil
 }

@@ -44,217 +44,243 @@ import (
 
 func TestPull(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	localGit, err := git.NewLocal(git.Options{
-		Dir: dir,
-	})
+	localGit, err := git.NewLocal(git.Options{})
 	if err != nil {
 		t.Skip("Can't find Git, skipping:", err)
 	}
+	dir := t.TempDir()
 	g := git.Custom(dir, localGit, localGit)
 	objects, err := initPullTestRepository(ctx, g, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, transport := range allTransportVariants(localGit.Exe()) {
-		t.Run(transport.name, func(t *testing.T) {
-			for version := 1; version <= 2; version++ {
-				t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
-					u := transport.getURL(t, dir)
-					runPullTest(ctx, t, u, version, objects)
-				})
+	forEachTransportVersion(t, localGit.Exe(), dir, func(t *testing.T, u *url.URL, version int) {
+		remote, err := NewRemote(u, nil)
+		if err != nil {
+			t.Fatal("NewRemote:", err)
+		}
+		if version == 1 {
+			remote.pullExtraParams = v1ExtraParams
+		}
+		stream, err := remote.StartPull(ctx)
+		if err != nil {
+			t.Fatal("remote.StartPull:", err)
+		}
+		defer func() {
+			if err := stream.Close(); err != nil {
+				t.Error("stream.Close():", err)
+			}
+		}()
+
+		t.Run("ListRefs", func(t *testing.T) {
+			got, err := stream.ListRefs()
+			if err != nil {
+				t.Fatal("ListRefs:", err)
+			}
+			want := map[githash.Ref]*Ref{
+				githash.Head: {
+					Name:         githash.Head,
+					ObjectID:     objects.commit2.SHA1(),
+					SymrefTarget: objects.mainRef,
+				},
+				objects.mainRef: {
+					Name:     objects.mainRef,
+					ObjectID: objects.commit2.SHA1(),
+				},
+				objects.ref1: {
+					Name:     objects.ref1,
+					ObjectID: objects.commit1.SHA1(),
+				},
+				objects.ref2: {
+					Name:     objects.ref2,
+					ObjectID: objects.commit2.SHA1(),
+				},
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("ListRefs() (-want +got):\n%s", diff)
 			}
 		})
-	}
+
+		t.Run("Negotiate/All", func(t *testing.T) {
+			resp, err := stream.Negotiate(&PullRequest{
+				Want: []githash.SHA1{objects.commit2.SHA1()},
+			})
+			if err != nil {
+				t.Fatal("stream.Negotiate:", err)
+			}
+			if resp.Packfile == nil {
+				t.Fatal("stream.Negotiate returned nil Packfile")
+			}
+			defer func() {
+				if err := resp.Packfile.Close(); err != nil {
+					t.Error("resp.Packfile.Close():", err)
+				}
+			}()
+			got, err := readPackfile(bufio.NewReader(resp.Packfile))
+			if err != nil {
+				t.Error(err)
+			}
+			want := map[githash.SHA1][]byte{
+				objects.blobObjectID(): objects.blobContent,
+				objects.tree1.SHA1():   mustMarshalBinary(t, objects.tree1),
+				objects.commit1.SHA1(): mustMarshalBinary(t, objects.commit1),
+				objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
+				objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("objects (-want +got):\n%s", diff)
+			}
+		})
+
+		t.Run("Negotiate/First", func(t *testing.T) {
+			resp, err := stream.Negotiate(&PullRequest{
+				Want: []githash.SHA1{objects.commit1.SHA1()},
+			})
+			if err != nil {
+				t.Fatal("stream.Negotiate:", err)
+			}
+			if resp.Packfile == nil {
+				t.Fatal("stream.Negotiate returned nil Packfile")
+			}
+			defer func() {
+				if err := resp.Packfile.Close(); err != nil {
+					t.Error("resp.Packfile.Close():", err)
+				}
+			}()
+			got, err := readPackfile(bufio.NewReader(resp.Packfile))
+			if err != nil {
+				t.Error(err)
+			}
+			want := map[githash.SHA1][]byte{
+				objects.blobObjectID(): objects.blobContent,
+				objects.tree1.SHA1():   mustMarshalBinary(t, objects.tree1),
+				objects.commit1.SHA1(): mustMarshalBinary(t, objects.commit1),
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("objects (-want +got):\n%s", diff)
+			}
+		})
+
+		t.Run("Negotiate/Incremental", func(t *testing.T) {
+			resp, err := stream.Negotiate(&PullRequest{
+				Want: []githash.SHA1{objects.commit2.SHA1()},
+				Have: []githash.SHA1{objects.commit1.SHA1()},
+			})
+			if err != nil {
+				t.Fatal("stream.Negotiate:", err)
+			}
+			if resp.Packfile == nil {
+				t.Fatal("stream.Negotiate returned nil Packfile")
+			}
+			defer func() {
+				if err := resp.Packfile.Close(); err != nil {
+					t.Error("resp.Packfile.Close():", err)
+				}
+			}()
+			got, err := readPackfile(bufio.NewReader(resp.Packfile))
+			if err != nil {
+				t.Error(err)
+			}
+			want := map[githash.SHA1][]byte{
+				objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
+				objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("objects (-want +got):\n%s", diff)
+			}
+		})
+
+		t.Run("Negotiate/ShallowSecond", func(t *testing.T) {
+			resp, err := stream.Negotiate(&PullRequest{
+				Want:  []githash.SHA1{objects.commit2.SHA1()},
+				Depth: 1,
+			})
+			if err != nil {
+				t.Fatal("stream.Negotiate:", err)
+			}
+			if resp.Packfile == nil {
+				t.Fatal("stream.Negotiate returned nil Packfile")
+			}
+			defer func() {
+				if err := resp.Packfile.Close(); err != nil {
+					t.Error("resp.Packfile.Close():", err)
+				}
+			}()
+			got, err := readPackfile(bufio.NewReader(resp.Packfile))
+			if err != nil {
+				t.Error(err)
+			}
+			want := map[githash.SHA1][]byte{
+				objects.blobObjectID(): objects.blobContent,
+				objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
+				objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("objects (-want +got):\n%s", diff)
+			}
+		})
+
+		t.Run("Negotiate/HaveMore", func(t *testing.T) {
+			randomHash, err := githash.ParseSHA1("ccfe3cfa687f0ea735937a81454d21fef86cdce8")
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := stream.Negotiate(&PullRequest{
+				Want:     []githash.SHA1{objects.commit2.SHA1()},
+				Have:     []githash.SHA1{randomHash},
+				HaveMore: true,
+			})
+			if err != nil {
+				t.Fatal("stream.Negotiate:", err)
+			}
+			if resp.Packfile != nil {
+				resp.Packfile.Close()
+				t.Fatal("stream.Negotiate returned non-nil Packfile")
+			}
+			if _, remoteHasRandomHash := resp.Acks[randomHash]; remoteHasRandomHash {
+				t.Error("Remote acknowledged random hash")
+			}
+		})
+	})
 }
 
-func runPullTest(ctx context.Context, t *testing.T, u *url.URL, version int, objects *pullTestObjects) {
-	remote, err := NewRemote(u, nil)
+func TestPullEmpty(t *testing.T) {
+	ctx := context.Background()
+	localGit, err := git.NewLocal(git.Options{})
 	if err != nil {
-		t.Fatal("NewRemote:", err)
+		t.Skip("Can't find Git, skipping:", err)
 	}
-	if version == 1 {
-		remote.pullExtraParams = v1ExtraParams
+	dir := t.TempDir()
+	g := git.Custom(dir, localGit, localGit)
+	if err := g.InitBare(ctx, "."); err != nil {
+		t.Fatal(err)
 	}
-	stream, err := remote.StartPull(ctx)
-	if err != nil {
-		t.Fatal("remote.StartPull:", err)
-	}
-	defer func() {
-		if err := stream.Close(); err != nil {
-			t.Error("stream.Close():", err)
-		}
-	}()
 
-	t.Run("ListRefs", func(t *testing.T) {
-		got, err := stream.ListRefs()
+	forEachTransportVersion(t, localGit.Exe(), dir, func(t *testing.T, u *url.URL, version int) {
+		remote, err := NewRemote(u, nil)
 		if err != nil {
-			t.Fatal("ListRefs:", err)
+			t.Fatal("NewRemote:", err)
 		}
-		want := map[githash.Ref]*Ref{
-			githash.Head: {
-				Name:         githash.Head,
-				ObjectID:     objects.commit2.SHA1(),
-				SymrefTarget: objects.mainRef,
-			},
-			objects.mainRef: {
-				Name:     objects.mainRef,
-				ObjectID: objects.commit2.SHA1(),
-			},
-			objects.ref1: {
-				Name:     objects.ref1,
-				ObjectID: objects.commit1.SHA1(),
-			},
-			objects.ref2: {
-				Name:     objects.ref2,
-				ObjectID: objects.commit2.SHA1(),
-			},
+		if version == 1 {
+			remote.pullExtraParams = v1ExtraParams
 		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("ListRefs() (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("Negotiate/All", func(t *testing.T) {
-		resp, err := stream.Negotiate(&PullRequest{
-			Want: []githash.SHA1{objects.commit2.SHA1()},
-		})
+		stream, err := remote.StartPull(ctx)
 		if err != nil {
-			t.Fatal("stream.Negotiate:", err)
-		}
-		if resp.Packfile == nil {
-			t.Fatal("stream.Negotiate returned nil Packfile")
+			t.Fatal("remote.StartPull:", err)
 		}
 		defer func() {
-			if err := resp.Packfile.Close(); err != nil {
-				t.Error("resp.Packfile.Close():", err)
+			if err := stream.Close(); err != nil {
+				t.Error("stream.Close():", err)
 			}
 		}()
-		got, err := readPackfile(bufio.NewReader(resp.Packfile))
-		if err != nil {
-			t.Error(err)
-		}
-		want := map[githash.SHA1][]byte{
-			objects.blobObjectID(): objects.blobContent,
-			objects.tree1.SHA1():   mustMarshalBinary(t, objects.tree1),
-			objects.commit1.SHA1(): mustMarshalBinary(t, objects.commit1),
-			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
-			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("objects (-want +got):\n%s", diff)
-		}
-	})
 
-	t.Run("Negotiate/First", func(t *testing.T) {
-		resp, err := stream.Negotiate(&PullRequest{
-			Want: []githash.SHA1{objects.commit1.SHA1()},
-		})
-		if err != nil {
-			t.Fatal("stream.Negotiate:", err)
-		}
-		if resp.Packfile == nil {
-			t.Fatal("stream.Negotiate returned nil Packfile")
-		}
-		defer func() {
-			if err := resp.Packfile.Close(); err != nil {
-				t.Error("resp.Packfile.Close():", err)
+		t.Run("ListRefs", func(t *testing.T) {
+			got, err := stream.ListRefs()
+			if len(got) > 0 || err != nil {
+				t.Errorf("ListRefs() = %v, %v; want {}, <nil>", got, err)
 			}
-		}()
-		got, err := readPackfile(bufio.NewReader(resp.Packfile))
-		if err != nil {
-			t.Error(err)
-		}
-		want := map[githash.SHA1][]byte{
-			objects.blobObjectID(): objects.blobContent,
-			objects.tree1.SHA1():   mustMarshalBinary(t, objects.tree1),
-			objects.commit1.SHA1(): mustMarshalBinary(t, objects.commit1),
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("objects (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("Negotiate/Incremental", func(t *testing.T) {
-		resp, err := stream.Negotiate(&PullRequest{
-			Want: []githash.SHA1{objects.commit2.SHA1()},
-			Have: []githash.SHA1{objects.commit1.SHA1()},
 		})
-		if err != nil {
-			t.Fatal("stream.Negotiate:", err)
-		}
-		if resp.Packfile == nil {
-			t.Fatal("stream.Negotiate returned nil Packfile")
-		}
-		defer func() {
-			if err := resp.Packfile.Close(); err != nil {
-				t.Error("resp.Packfile.Close():", err)
-			}
-		}()
-		got, err := readPackfile(bufio.NewReader(resp.Packfile))
-		if err != nil {
-			t.Error(err)
-		}
-		want := map[githash.SHA1][]byte{
-			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
-			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("objects (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("Negotiate/ShallowSecond", func(t *testing.T) {
-		resp, err := stream.Negotiate(&PullRequest{
-			Want:  []githash.SHA1{objects.commit2.SHA1()},
-			Depth: 1,
-		})
-		if err != nil {
-			t.Fatal("stream.Negotiate:", err)
-		}
-		if resp.Packfile == nil {
-			t.Fatal("stream.Negotiate returned nil Packfile")
-		}
-		defer func() {
-			if err := resp.Packfile.Close(); err != nil {
-				t.Error("resp.Packfile.Close():", err)
-			}
-		}()
-		got, err := readPackfile(bufio.NewReader(resp.Packfile))
-		if err != nil {
-			t.Error(err)
-		}
-		want := map[githash.SHA1][]byte{
-			objects.blobObjectID(): objects.blobContent,
-			objects.tree2.SHA1():   mustMarshalBinary(t, objects.tree2),
-			objects.commit2.SHA1(): mustMarshalBinary(t, objects.commit2),
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("objects (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("Negotiate/HaveMore", func(t *testing.T) {
-		randomHash, err := githash.ParseSHA1("ccfe3cfa687f0ea735937a81454d21fef86cdce8")
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := stream.Negotiate(&PullRequest{
-			Want:     []githash.SHA1{objects.commit2.SHA1()},
-			Have:     []githash.SHA1{randomHash},
-			HaveMore: true,
-		})
-		if err != nil {
-			t.Fatal("stream.Negotiate:", err)
-		}
-		if resp.Packfile != nil {
-			resp.Packfile.Close()
-			t.Fatal("stream.Negotiate returned non-nil Packfile")
-		}
-		if _, remoteHasRandomHash := resp.Acks[randomHash]; remoteHasRandomHash {
-			t.Error("Remote acknowledged random hash")
-		}
 	})
 }
 
@@ -471,6 +497,20 @@ func allTransportVariants(gitExe string) []transportVariant {
 			}
 			return u
 		}},
+	}
+}
+
+func forEachTransportVersion(t *testing.T, gitExe, dir string, f func(t *testing.T, u *url.URL, version int)) {
+	t.Helper()
+
+	for _, transport := range allTransportVariants(gitExe) {
+		t.Run(transport.name, func(t *testing.T) {
+			for version := 1; version <= 2; version++ {
+				t.Run(fmt.Sprintf("Version%d", version), func(t *testing.T) {
+					f(t, transport.getURL(t, dir), version)
+				})
+			}
+		})
 	}
 }
 

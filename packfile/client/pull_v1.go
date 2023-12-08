@@ -112,6 +112,10 @@ func (p *pullV1) listRefs(ctx context.Context, refPrefixes []string) (map[githas
 // response, skipping the "version 1" line if necessary. The caller is expected
 // to have advanced r to the first line before calling readFirstRefV1.
 func readFirstRefV1(r *pktline.Reader) (*Ref, capabilityList, error) {
+	if r.Type() == pktline.Flush {
+		// Old versions of Git (~2.17) may only send a flush packet on an empty repository.
+		return nil, nil, nil
+	}
 	line, err := r.Text()
 	if err != nil {
 		return nil, nil, fmt.Errorf("read refs: first ref: %w", err)
@@ -119,6 +123,10 @@ func readFirstRefV1(r *pktline.Reader) (*Ref, capabilityList, error) {
 	if bytes.Equal(line, []byte("version 1")) {
 		// Skip optional initial "version 1" packet.
 		r.Next()
+		if r.Type() == pktline.Flush {
+			// Old versions of Git (~2.17) may only send a flush packet on an empty repository.
+			return nil, nil, nil
+		}
 		line, err = r.Text()
 		if err != nil {
 			return nil, nil, fmt.Errorf("read refs: first ref: %w", err)

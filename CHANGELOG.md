@@ -5,6 +5,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.11.0...main
 
+## [Unreleased][]
+
+### Fixed
+
+- Using `packfile/client` to read from an empty repository on old versions (~2.17) of Git
+  no longer returns an error.
+
 ## [0.11.0][] - 2023-08-01
 
 Version 0.11 adds an iteration API for refs.
