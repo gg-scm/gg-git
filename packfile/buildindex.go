@@ -24,7 +24,6 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
-	"io/ioutil"
 	"sort"
 	"sync"
 
@@ -203,7 +202,7 @@ func baseIndexPass(r *byteReaderCounter, nobjs uint32) (*baseIndex, error) {
 		objType := hdr.Type.NonDelta()
 		if objType == "" {
 			// Deltified object.
-			size, err := io.Copy(ioutil.Discard, z)
+			size, err := io.Copy(io.Discard, z)
 			if err != nil {
 				return nil, err
 			}

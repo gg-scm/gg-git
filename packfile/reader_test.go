@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -272,7 +271,7 @@ func readAll(br ByteReader) ([]unpackedObject, error) {
 			}
 			return got, err
 		}
-		data, err := ioutil.ReadAll(r)
+		data, err := io.ReadAll(r)
 		got = append(got, unpackedObject{
 			Header: hdr,
 			Data:   data,
@@ -314,7 +313,7 @@ func hashLiteral(s string) githash.SHA1 {
 }
 
 func BenchmarkReader(b *testing.B) {
-	data, err := ioutil.ReadFile(filepath.Join("testdata", "FirstCommit.pack"))
+	data, err := os.ReadFile(filepath.Join("testdata", "FirstCommit.pack"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -332,7 +331,7 @@ func BenchmarkReader(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, err := io.Copy(ioutil.Discard, r); err != nil {
+		if _, err := io.Copy(io.Discard, r); err != nil {
 			b.Fatal(err)
 		}
 	}

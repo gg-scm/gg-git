@@ -19,7 +19,8 @@ package git_test
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+
+	"os"
 
 	"gg-scm.io/pkg/git"
 )
@@ -90,7 +91,7 @@ func ExampleGit_Commit() {
 	}
 
 	// Write a file and track it with `git add`.
-	err = ioutil.WriteFile("foo.txt", []byte("Hello, World!\n"), 0666)
+	err = os.WriteFile("foo.txt", []byte("Hello, World!\n"), 0o666)
 	if err != nil {
 		// handle error
 	}

@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"io/ioutil"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -76,7 +75,7 @@ func TestWriter(t *testing.T) {
 	}
 
 	t.Run("TooLong", func(t *testing.T) {
-		w := NewWriter(ioutil.Discard, 1)
+		w := NewWriter(io.Discard, 1)
 		const blobContent = "Hi"
 		_, err := w.WriteHeader(&Header{
 			Type: Blob,
@@ -93,7 +92,7 @@ func TestWriter(t *testing.T) {
 	})
 
 	t.Run("TooShort", func(t *testing.T) {
-		w := NewWriter(ioutil.Discard, 1)
+		w := NewWriter(io.Discard, 1)
 		const blobContent = "Hello"
 		_, err := w.WriteHeader(&Header{
 			Type: Blob,

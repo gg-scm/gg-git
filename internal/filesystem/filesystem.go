@@ -19,7 +19,6 @@ package filesystem
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,17 +124,17 @@ func (dir Dir) Apply(ops ...Operation) error {
 		case nop:
 			// Do nothing.
 		case opWrite:
-			if err := os.MkdirAll(filepath.Dir(p), 0777); err != nil {
+			if err := os.MkdirAll(filepath.Dir(p), 0o777); err != nil {
 				return err
 			}
-			if err := ioutil.WriteFile(p, []byte(o.arg), 0666); err != nil {
+			if err := os.WriteFile(p, []byte(o.arg), 0o666); err != nil {
 				return err
 			}
 		case opMkdir:
-			if err := os.MkdirAll(filepath.Dir(p), 0777); err != nil {
+			if err := os.MkdirAll(filepath.Dir(p), 0o777); err != nil {
 				return err
 			}
-			if err := os.Mkdir(p, 0777); err != nil {
+			if err := os.Mkdir(p, 0o777); err != nil {
 				return err
 			}
 		case opRemove:

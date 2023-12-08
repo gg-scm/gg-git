@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -281,7 +280,7 @@ func initPullTestRepository(ctx context.Context, g *git.Git, dir string) (*pullT
 	}
 	const filename1 = "1.txt"
 	const fileContent = "Hello, World!\n"
-	err = ioutil.WriteFile(filepath.Join(dir, filename1), []byte(fileContent), 0o666)
+	err = os.WriteFile(filepath.Join(dir, filename1), []byte(fileContent), 0o666)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +306,7 @@ func initPullTestRepository(ctx context.Context, g *git.Git, dir string) (*pullT
 	}
 
 	const filename2 = "2.txt"
-	err = ioutil.WriteFile(filepath.Join(dir, filename2), []byte(fileContent), 0o666)
+	err = os.WriteFile(filepath.Join(dir, filename2), []byte(fileContent), 0o666)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +481,7 @@ func serveHTTPRepository(gitExe string, dir string) *httptest.Server {
 			// Go's net/http/cgi server doesn't support chunked encoding, which is
 			// a non-standard CGI feature that Apache supports. https://golang.org/issue/5613
 			// We're okay with a really inefficient implementation for tests.
-			bodyFile, err := ioutil.TempFile("", "git-server-body")
+			bodyFile, err := os.CreateTemp("", "git-server-body")
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

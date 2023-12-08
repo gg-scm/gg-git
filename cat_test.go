@@ -16,7 +16,7 @@ package git
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"strings"
 	"testing"
 
@@ -76,7 +76,7 @@ func TestCat(t *testing.T) {
 			if err != nil {
 				t.Fatal("Cat error:", err)
 			}
-			got, err := ioutil.ReadAll(r)
+			got, err := io.ReadAll(r)
 			if string(got) != test.want {
 				t.Errorf("read content = %q; want %q", got, test.want)
 			}

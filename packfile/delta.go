@@ -22,7 +22,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 
 	"gg-scm.io/pkg/git/object"
 )
@@ -172,7 +171,7 @@ func DeltaObjectSize(delta ByteReader) (int64, error) {
 		case instruction != 0:
 			// Add new data
 			n += int64(instruction)
-			if err := copyN(ioutil.Discard, delta, int64(instruction)); err != nil {
+			if err := copyN(io.Discard, delta, int64(instruction)); err != nil {
 				return 0, fmt.Errorf("calculate delta object size: %w", err)
 			}
 		default:

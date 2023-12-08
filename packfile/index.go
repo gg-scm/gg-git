@@ -21,7 +21,6 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"sort"
 
 	"gg-scm.io/pkg/git/githash"
@@ -213,7 +212,7 @@ func readIndexV1(r io.Reader) (*Index, error) {
 const fanOutEntryCount = 256
 
 func readIndexObjectCount(r io.Reader) (uint32, error) {
-	if _, err := io.CopyN(ioutil.Discard, r, (fanOutEntryCount-1)*4); err != nil {
+	if _, err := io.CopyN(io.Discard, r, (fanOutEntryCount-1)*4); err != nil {
 		return 0, fmt.Errorf("fanout table: %w", err)
 	}
 	var raw [4]byte

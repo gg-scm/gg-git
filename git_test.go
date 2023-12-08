@@ -16,7 +16,6 @@ package git
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,15 +57,7 @@ func TestLocalCommand(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			dir, err := ioutil.TempDir("", "gg_gittool_test")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() {
-				if err := os.Remove(dir); err != nil {
-					t.Error("cleaning up directory:", err)
-				}
-			}()
+			dir := t.TempDir()
 			var hookArgs []string
 			var env []string
 			if test.env != nil {
@@ -221,7 +212,7 @@ type testEnv struct {
 }
 
 func newTestEnv(ctx context.Context, gitExe string) (*testEnv, error) {
-	topPath, err := ioutil.TempDir("", "gg_git_test")
+	topPath, err := os.MkdirTemp("", "gg_git_test")
 	if err != nil {
 		return nil, err
 	}

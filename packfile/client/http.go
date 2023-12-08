@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -141,7 +140,7 @@ func (r *httpRemote) uploadPack(ctx context.Context, extraParams string, request
 			contentTypeHeader: {"application/x-git-upload-pack-request"},
 			gitProtocolHeader: {extraParams},
 		},
-		Body: ioutil.NopCloser(request),
+		Body: io.NopCloser(request),
 	})
 	if err != nil {
 		return nil, err

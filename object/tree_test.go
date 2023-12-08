@@ -19,7 +19,6 @@ package object
 import (
 	"encoding"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,7 +141,7 @@ var treeTests = []struct {
 func TestParseTree(t *testing.T) {
 	for _, test := range treeTests {
 		t.Run(test.name, func(t *testing.T) {
-			src, err := ioutil.ReadFile(filepath.Join("testdata", fmt.Sprintf("tree-%x", test.id)))
+			src, err := os.ReadFile(filepath.Join("testdata", fmt.Sprintf("tree-%x", test.id)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -161,7 +160,7 @@ func TestParseTree(t *testing.T) {
 func TestTreeMarshalBinary(t *testing.T) {
 	for _, test := range treeTests {
 		t.Run(test.name, func(t *testing.T) {
-			want, err := ioutil.ReadFile(filepath.Join("testdata", fmt.Sprintf("tree-%x", test.id)))
+			want, err := os.ReadFile(filepath.Join("testdata", fmt.Sprintf("tree-%x", test.id)))
 			if err != nil {
 				t.Fatal(err)
 			}

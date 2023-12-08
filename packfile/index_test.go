@@ -19,7 +19,6 @@ package packfile
 import (
 	"bytes"
 	"encoding"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -118,7 +117,7 @@ func TestIndexEncodeV1(t *testing.T) {
 			continue
 		}
 		t.Run(test.name, func(t *testing.T) {
-			want, err := ioutil.ReadFile(filepath.Join("testdata", test.name+".idx1"))
+			want, err := os.ReadFile(filepath.Join("testdata", test.name+".idx1"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +132,7 @@ func TestIndexEncodeV1(t *testing.T) {
 	}
 
 	t.Run("Nil", func(t *testing.T) {
-		want, err := ioutil.ReadFile(filepath.Join("testdata", "Empty.idx1"))
+		want, err := os.ReadFile(filepath.Join("testdata", "Empty.idx1"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,7 +152,7 @@ func TestIndexEncodeV2(t *testing.T) {
 			continue
 		}
 		t.Run(test.name, func(t *testing.T) {
-			want, err := ioutil.ReadFile(filepath.Join("testdata", test.name+".idx2"))
+			want, err := os.ReadFile(filepath.Join("testdata", test.name+".idx2"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -168,7 +167,7 @@ func TestIndexEncodeV2(t *testing.T) {
 	}
 
 	t.Run("BigOffset", func(t *testing.T) {
-		want, err := ioutil.ReadFile(filepath.Join("testdata", "BigOffset.idx2"))
+		want, err := os.ReadFile(filepath.Join("testdata", "BigOffset.idx2"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +181,7 @@ func TestIndexEncodeV2(t *testing.T) {
 	})
 
 	t.Run("Nil", func(t *testing.T) {
-		want, err := ioutil.ReadFile(filepath.Join("testdata", "Empty.idx2"))
+		want, err := os.ReadFile(filepath.Join("testdata", "Empty.idx2"))
 		if err != nil {
 			t.Fatal(err)
 		}

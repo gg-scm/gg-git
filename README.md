@@ -30,7 +30,7 @@ if err != nil {
 }
 
 // Write a file and track it with `git add`.
-err = ioutil.WriteFile("foo.txt", []byte("Hello, World!\n"), 0666)
+err = os.WriteFile("foo.txt", []byte("Hello, World!\n"), 0o666)
 if err != nil {
   return err
 }

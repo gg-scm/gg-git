@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 
 	"gg-scm.io/pkg/git/githash"
 	"gg-scm.io/pkg/git/object"
@@ -89,7 +88,7 @@ func (r *Reader) Next() (*Header, error) {
 		return nil, err
 	}
 	if r.dataReader != nil {
-		n, err := io.Copy(ioutil.Discard, r.dataReader)
+		n, err := io.Copy(io.Discard, r.dataReader)
 		if err != nil {
 			return nil, fmt.Errorf("packfile: advance to next object: %w", err)
 		}
@@ -104,7 +103,7 @@ func (r *Reader) Next() (*Header, error) {
 	if r.nobjs == 0 {
 		// Consume trailing checksum.
 		// TODO(someday): Verify integrity. This is a SHA-1 hash.
-		if _, err := io.CopyN(ioutil.Discard, &r.r, githash.SHA1Size); err != nil {
+		if _, err := io.CopyN(io.Discard, &r.r, githash.SHA1Size); err != nil {
 			return nil, fmt.Errorf("packfile: read trailing checksum: %w", err)
 		}
 		return nil, io.EOF
