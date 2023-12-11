@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	slashpath "path"
 	"strconv"
@@ -165,7 +166,7 @@ func (g *Git) IsAncestor(ctx context.Context, rev1, rev2 string) (bool, error) {
 }
 
 // TreeEntry represents a single entry in a Git tree object.
-// It implements os.FileInfo.
+// It implements [fs.FileInfo].
 type TreeEntry struct {
 	size int64
 	raw  object.TreeEntry
@@ -181,7 +182,7 @@ func (ent *TreeEntry) Path() TopPath { return TopPath(ent.raw.Name) }
 func (ent *TreeEntry) Size() int64 { return ent.size }
 
 // Mode returns the file mode bits.
-func (ent *TreeEntry) Mode() os.FileMode {
+func (ent *TreeEntry) Mode() fs.FileMode {
 	mode, ok := ent.raw.Mode.FileMode()
 	if !ok {
 		panic("unsupported mode")
@@ -190,13 +191,13 @@ func (ent *TreeEntry) Mode() os.FileMode {
 }
 
 // ModTime returns the zero time. It exists purely to satisfy the
-// os.FileInfo interface.
+// [fs.FileInfo] interface.
 func (ent *TreeEntry) ModTime() time.Time { return time.Time{} }
 
 // IsDir reports whether the file mode indicates a directory.
 func (ent *TreeEntry) IsDir() bool { return ent.raw.Mode.IsDir() }
 
-// Sys returns nil. It exists purely to satisfy the os.FileInfo interface.
+// Sys returns nil. It exists purely to satisfy the [fs.FileInfo] interface.
 func (ent *TreeEntry) Sys() interface{} { return nil }
 
 // ObjectType returns the file's Git object type.

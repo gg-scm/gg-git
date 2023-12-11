@@ -21,7 +21,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"sort"
 	"strconv"
 	"strings"
@@ -211,8 +211,9 @@ func (ent *TreeEntry) String() string {
 // https://github.com/git/git/blob/0ef60afdd4416345b16b5c4d8d0558a08d680bc5/compat/vcbuild/include/unistd.h#L71-L96
 // https://en.wikibooks.org/wiki/C_Programming/POSIX_Reference/sys/stat.h
 
-// Mode is a tree entry file mode. It is similar to os.FileMode, but is limited
-// to a specific set of modes.
+// Mode is a tree entry file mode.
+// It is similar to [fs.FileMode],
+// but is limited to a specific set of modes.
 type Mode uint32
 
 // Git tree entry modes.
@@ -286,19 +287,19 @@ func (m Mode) Format(f fmt.State, c rune) {
 	}
 }
 
-// FileMode converts the Git mode into an os.FileMode, if possible.
-// ModeGitlink will have both os.ModeDir and os.ModeSymlink set.
-func (m Mode) FileMode() (f os.FileMode, ok bool) {
-	perm := os.FileMode(m & 0o000777)
+// FileMode converts the Git mode into an [fs.FileMode], if possible.
+// ModeGitlink will have both [fs.ModeDir] and [fs.ModeSymlink] set.
+func (m Mode) FileMode() (f fs.FileMode, ok bool) {
+	perm := fs.FileMode(m & 0o000777)
 	switch m & typeMask {
 	case regularFile:
 		return perm, true
 	case ModeDir:
-		return os.ModeDir | perm, true
+		return fs.ModeDir | perm, true
 	case ModeSymlink:
-		return os.ModeSymlink | perm, true
+		return fs.ModeSymlink | perm, true
 	case ModeGitlink:
-		return os.ModeDir | os.ModeSymlink | perm, true
+		return fs.ModeDir | fs.ModeSymlink | perm, true
 	default:
 		return 0, false
 	}

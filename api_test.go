@@ -17,11 +17,14 @@ package git
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"testing"
 
 	"gg-scm.io/pkg/git/internal/filesystem"
 	"gg-scm.io/pkg/git/object"
 )
+
+var _ fs.FileInfo = (*TreeEntry)(nil)
 
 func TestCommandError(t *testing.T) {
 	tests := []struct {

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][]
 
+### Changed
+
+- The `io/fs` package is used for `FileMode` and `FileInfo` instead of `os`.
+  This should be a compatible change, since the `os` types are aliases.
+
 ### Fixed
 
 - Using `packfile/client` to read from an empty repository on old versions (~2.17) of Git

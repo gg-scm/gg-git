@@ -19,6 +19,7 @@ package object
 import (
 	"encoding"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -191,7 +192,7 @@ func TestMode(t *testing.T) {
 		mode       Mode
 		isRegular  bool
 		isDir      bool
-		fileMode   os.FileMode
+		fileMode   fs.FileMode
 		fileModeOK bool
 		string     string
 		octal      string
@@ -246,7 +247,7 @@ func TestMode(t *testing.T) {
 			mode:       ModeDir,
 			isRegular:  false,
 			isDir:      true,
-			fileMode:   os.ModeDir,
+			fileMode:   fs.ModeDir,
 			fileModeOK: true,
 			string:     "040000",
 			octal:      "40000",
@@ -257,7 +258,7 @@ func TestMode(t *testing.T) {
 			mode:       ModeSymlink,
 			isRegular:  false,
 			isDir:      false,
-			fileMode:   os.ModeSymlink,
+			fileMode:   fs.ModeSymlink,
 			fileModeOK: true,
 			string:     "120000",
 			octal:      "120000",
@@ -268,7 +269,7 @@ func TestMode(t *testing.T) {
 			mode:       ModeGitlink,
 			isRegular:  false,
 			isDir:      false,
-			fileMode:   os.ModeDir | os.ModeSymlink,
+			fileMode:   fs.ModeDir | fs.ModeSymlink,
 			fileModeOK: true,
 			string:     "160000",
 			octal:      "160000",

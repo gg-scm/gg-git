@@ -16,7 +16,7 @@ package git
 
 import (
 	"context"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -28,7 +28,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-var _ os.FileInfo = new(TreeEntry)
+var _ fs.FileInfo = new(TreeEntry)
 
 func TestListTree(t *testing.T) {
 	gitPath, err := findGit()
