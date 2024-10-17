@@ -123,8 +123,18 @@ func (tree Tree) Len() int {
 }
 
 // Less reports whether the i'th entry name is less than the j'th entry name.
+// See git src comment regarding adding '/' to a dir object:
+//   https://github.com/git/git/blob/15030f9556f545b167b1879b877a5d780252dc16/fsck.c#L529-L536
 func (tree Tree) Less(i, j int) bool {
-	return tree[i].Name < tree[j].Name
+	lhs := tree[i].Name
+	rhs := tree[j].Name
+	if tree[i].Mode == ModeDir {
+		lhs += "/"
+	}
+	if tree[j].Mode == ModeDir {
+		rhs += "/"
+	}
+	return lhs < rhs 
 }
 
 // Swap swaps the i'th entry with the j'th entry.
