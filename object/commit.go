@@ -312,7 +312,7 @@ func consumeSignature(src []byte) (sig, tail []byte, _ error) {
 }
 
 func parseTZOffset(src []byte) (*time.Location, error) {
-	if len(src) != 5 {
+	if len(src) != 5 && len(src) != 4 {
 		return nil, fmt.Errorf("parse UTC offset %q: wrong length", src)
 	}
 	var sign int
@@ -324,13 +324,12 @@ func parseTZOffset(src []byte) (*time.Location, error) {
 	default:
 		return nil, fmt.Errorf("parse UTC offset %q: must start with plus or minus sign", src)
 	}
-	for _, b := range src[1:] {
-		if b < '0' || b > '9' {
-			return nil, fmt.Errorf("parse UTC offset %q: must have 4 digits after sign", src)
-		}
+	hhmm, err := strconv.Atoi(string(src[1:]))
+	if err != nil {
+		return nil, fmt.Errorf("parse UTC offset %q: %w", src, err)
 	}
-	hours := int(src[1]-'0')*10 + int(src[2]-'0')
-	minutes := int(src[3]-'0')*10 + int(src[4]-'0')
+	hours := hhmm / 100
+	minutes := hhmm % 100
 	offset := (hours*60*60 + minutes*60) * sign
 	return time.FixedZone(string(src), offset), nil
 }
