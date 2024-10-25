@@ -39,6 +39,8 @@ var gitCommitTests = []struct {
 	id     githash.SHA1
 	data   string
 	parsed *Commit
+	// when the expected marshal of Commit is different from data string member, for example, when the timezone offset in data string only has 4 characters
+	expectedMarshal string
 }{
 	{
 		name: "RootCommit",
@@ -146,6 +148,40 @@ var gitCommitTests = []struct {
 				"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
 		},
 	},
+	{
+		name: "FourCharacterTimezoneOffset",
+		id:   hashLiteral("7d7c6a97f815e9279d08cfaea7d5efb5e90695a8"),
+		data: "tree e06bd601885e16ad3d72c2a8c9b411889b2e478e\n" +
+			"author Brian Kernighan <bwk> 80352345 -500\n" +
+			"committer Brian Kernighan <bwk> 80352345 -500\n" +
+			"golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb\n" +
+			"\n" +
+			"hello, world\n" +
+			"\n" +
+			"R=ken\n" +
+			"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+		parsed: &Commit{
+			Tree:       hashLiteral("e06bd601885e16ad3d72c2a8c9b411889b2e478e"),
+			Author:     "Brian Kernighan <bwk>",
+			AuthorTime: time.Unix(80352345, 0).In(time.FixedZone("-0500", -5*60*60)),
+			Committer:  "Brian Kernighan <bwk>",
+			CommitTime: time.Unix(80352345, 0).In(time.FixedZone("-0500", -5*60*60)),
+			Extra:      "golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb",
+			Message: "hello, world\n" +
+				"\n" +
+				"R=ken\n" +
+				"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+		},
+		expectedMarshal: "tree e06bd601885e16ad3d72c2a8c9b411889b2e478e\n" +
+			"author Brian Kernighan <bwk> 80352345 -0500\n" +
+			"committer Brian Kernighan <bwk> 80352345 -0500\n" +
+			"golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb\n" +
+			"\n" +
+			"hello, world\n" +
+			"\n" +
+			"R=ken\n" +
+			"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+	},
 }
 
 func TestParseCommit(t *testing.T) {
@@ -170,7 +206,10 @@ func TestCommitMarshalText(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(test.data, string(got)); diff != "" {
+			if test.expectedMarshal == "" {
+				test.expectedMarshal = test.data
+			}
+			if diff := cmp.Diff(test.expectedMarshal, string(got)); diff != "" {
 				t.Errorf("text (-want +got):\n%s", diff)
 			}
 		})
