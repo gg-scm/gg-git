@@ -39,13 +39,15 @@ type Commit struct {
 	// Author identifies the person who wrote the code.
 	Author User
 	// AuthorTime is the time the code was written.
-	// The Location is significant.
+	// The Location is significant,
+	// and its name may be used for serialization if it meets the correct format.
 	AuthorTime time.Time
 
 	// Committer identifies the person who committed the code to the repository.
 	Committer User
 	// CommitTime is the time the code was committed to the repository.
-	// The Location is significant.
+	// The Location is significant,
+	// and its name may be used for serialization if it meets the correct format.
 	CommitTime time.Time
 
 	// Extra stores any lines in the commit object
@@ -62,16 +64,16 @@ type Commit struct {
 	Message string
 }
 
-// ParseCommit deserializes a commit in the Git object format. It is the same as
-// calling UnmarshalText on a new commit.
+// ParseCommit deserializes a commit in the Git object format.
+// It is the same as calling [*Commit.UnmarshalBinary] on a new commit.
 func ParseCommit(data []byte) (*Commit, error) {
 	c := new(Commit)
 	err := c.UnmarshalText(data)
 	return c, err
 }
 
-// UnmarshalText deserializes a commit from the Git object format. It is the
-// same as calling UnmarshalBinary.
+// UnmarshalText deserializes a commit from the Git object format.
+// It is the same as calling [*Commit.UnmarshalBinary].
 func (c *Commit) UnmarshalText(data []byte) error {
 	return c.UnmarshalBinary(data)
 }
@@ -164,8 +166,8 @@ func (c *Commit) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// MarshalText serializes a commit into the Git object format. It is the same as
-// calling MarshalBinary.
+// MarshalText serializes a commit into the Git object format.
+// It is the same as calling [*Commit.MarshalBinary].
 func (c *Commit) MarshalText() ([]byte, error) {
 	return c.MarshalBinary()
 }
@@ -204,11 +206,21 @@ func writeUser(w io.Writer, name string, u User, t time.Time) error {
 	if !isSafeForHeader(string(u)) {
 		return fmt.Errorf("%s: %q contains unsafe characters", name, u)
 	}
-	_, err := fmt.Fprintf(w, "%s %s %d %s\n", name, u, t.Unix(), t.Format("-0700"))
+	_, err := fmt.Fprintf(w, "%s %s %d %s\n", name, u, t.Unix(), tzOffset(t))
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+func tzOffset(t time.Time) string {
+	name, offset := t.Zone()
+	// If the zone name is usable as a timezone offset, use it verbatim.
+	// This is critical for round-tripping commits with non-standard timezones.
+	if got, err := parseTZOffset([]byte(name)); err == nil && offset == got {
+		return name
+	}
+	return t.Format("-0700")
 }
 
 // SHA1 computes the SHA-1 hash of the commit object. This is commonly known as
@@ -283,10 +295,12 @@ func consumeUser(src []byte) (_ User, _ time.Time, tail []byte, _ error) {
 	if err != nil {
 		return "", time.Time{}, src, fmt.Errorf("parse timestamp: %w", err)
 	}
-	tz, err := parseTZOffset(line[tzOffsetStart:])
+	tzPart := line[tzOffsetStart:]
+	tzOffset, err := parseTZOffset(tzPart)
 	if err != nil {
 		return "", time.Time{}, src, err
 	}
+	tz := time.FixedZone(string(tzPart), tzOffset)
 	return User(line[:userEnd]), time.Unix(timestamp, 0).In(tz), tail, nil
 }
 
@@ -311,9 +325,9 @@ func consumeSignature(src []byte) (sig, tail []byte, _ error) {
 	return sig, tail, nil
 }
 
-func parseTZOffset(src []byte) (*time.Location, error) {
-	if len(src) != 5 {
-		return nil, fmt.Errorf("parse UTC offset %q: wrong length", src)
+func parseTZOffset(src []byte) (int, error) {
+	if len(src) < 2 || len(src) > 5 {
+		return 0, fmt.Errorf("parse UTC offset %q: wrong length", src)
 	}
 	var sign int
 	switch src[0] {
@@ -322,17 +336,25 @@ func parseTZOffset(src []byte) (*time.Location, error) {
 	case '+':
 		sign = 1
 	default:
-		return nil, fmt.Errorf("parse UTC offset %q: must start with plus or minus sign", src)
+		return 0, fmt.Errorf("parse UTC offset %q: must start with plus or minus sign", src)
 	}
-	for _, b := range src[1:] {
+	digits := src[1:]
+	for _, b := range digits {
 		if b < '0' || b > '9' {
-			return nil, fmt.Errorf("parse UTC offset %q: must have 4 digits after sign", src)
+			return 0, fmt.Errorf("parse UTC offset %q: must only have digits after sign", src)
 		}
 	}
-	hours := int(src[1]-'0')*10 + int(src[2]-'0')
-	minutes := int(src[3]-'0')*10 + int(src[4]-'0')
-	offset := (hours*60*60 + minutes*60) * sign
-	return time.FixedZone(string(src), offset), nil
+	hours := tzDigit(digits, -4)*10 + tzDigit(digits, -3)
+	minutes := tzDigit(digits, -2)*10 + tzDigit(digits, -1)
+	return (hours*60*60 + minutes*60) * sign, nil
+}
+
+func tzDigit(digits []byte, i int) int {
+	i = len(digits) + i
+	if i < 0 {
+		return 0
+	}
+	return int(digits[i] - '0')
 }
 
 var gpgSignaturePrefix = []byte("gpgsig")

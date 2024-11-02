@@ -146,6 +146,26 @@ var gitCommitTests = []struct {
 				"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
 		},
 	},
+	{
+		name: "FourCharacterTimezoneOffset",
+		// https://github.com/vim-scripts/vim-addon-background-cmd/commit/f0e4d5e374be84832bd6b2307085942ec376d7c3
+		id: hashLiteral("f0e4d5e374be84832bd6b2307085942ec376d7c3"),
+		data: "tree 2e0f03b8f4bbcdcb7c7925c54829af0426b1f47d\n" +
+			"parent a8fb1d583d1341f1a5449f7857a817a139f7ee44\n" +
+			"author Marc Weber <marco-oweber@gmx.de> 1263859200 +0000\n" +
+			"committer Able Scraper <scraper@vim-scripts.org> 1289713595 -800\n" +
+			"\n" +
+			"Version 0.3.1: fixes + QuickFix shortcut\n",
+		parsed: &Commit{
+			Tree:       hashLiteral("2e0f03b8f4bbcdcb7c7925c54829af0426b1f47d"),
+			Parents:    []githash.SHA1{hashLiteral("a8fb1d583d1341f1a5449f7857a817a139f7ee44")},
+			Author:     "Marc Weber <marco-oweber@gmx.de>",
+			AuthorTime: time.Unix(1263859200, 0).In(time.FixedZone("+0000", 0)),
+			Committer:  "Able Scraper <scraper@vim-scripts.org>",
+			CommitTime: time.Unix(1289713595, 0).In(time.FixedZone("-800", -8*60*60)),
+			Message:    "Version 0.3.1: fixes + QuickFix shortcut\n",
+		},
+	},
 }
 
 func TestParseCommit(t *testing.T) {
