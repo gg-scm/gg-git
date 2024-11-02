@@ -39,8 +39,6 @@ var gitCommitTests = []struct {
 	id     githash.SHA1
 	data   string
 	parsed *Commit
-	// when the expected marshal of Commit is different from data string member, for example, when the timezone offset in data string only has 4 characters
-	expectedMarshal string
 }{
 	{
 		name: "RootCommit",
@@ -150,37 +148,23 @@ var gitCommitTests = []struct {
 	},
 	{
 		name: "FourCharacterTimezoneOffset",
-		id:   hashLiteral("7d7c6a97f815e9279d08cfaea7d5efb5e90695a8"),
-		data: "tree e06bd601885e16ad3d72c2a8c9b411889b2e478e\n" +
-			"author Brian Kernighan <bwk> 80352345 -500\n" +
-			"committer Brian Kernighan <bwk> 80352345 -500\n" +
-			"golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb\n" +
+		// https://github.com/vim-scripts/vim-addon-background-cmd/commit/f0e4d5e374be84832bd6b2307085942ec376d7c3
+		id: hashLiteral("f0e4d5e374be84832bd6b2307085942ec376d7c3"),
+		data: "tree 2e0f03b8f4bbcdcb7c7925c54829af0426b1f47d\n" +
+			"parent a8fb1d583d1341f1a5449f7857a817a139f7ee44\n" +
+			"author Marc Weber <marco-oweber@gmx.de> 1263859200 +0000\n" +
+			"committer Able Scraper <scraper@vim-scripts.org> 1289713595 -800\n" +
 			"\n" +
-			"hello, world\n" +
-			"\n" +
-			"R=ken\n" +
-			"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+			"Version 0.3.1: fixes + QuickFix shortcut\n",
 		parsed: &Commit{
-			Tree:       hashLiteral("e06bd601885e16ad3d72c2a8c9b411889b2e478e"),
-			Author:     "Brian Kernighan <bwk>",
-			AuthorTime: time.Unix(80352345, 0).In(time.FixedZone("-0500", -5*60*60)),
-			Committer:  "Brian Kernighan <bwk>",
-			CommitTime: time.Unix(80352345, 0).In(time.FixedZone("-0500", -5*60*60)),
-			Extra:      "golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb",
-			Message: "hello, world\n" +
-				"\n" +
-				"R=ken\n" +
-				"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
+			Tree:       hashLiteral("2e0f03b8f4bbcdcb7c7925c54829af0426b1f47d"),
+			Parents:    []githash.SHA1{hashLiteral("a8fb1d583d1341f1a5449f7857a817a139f7ee44")},
+			Author:     "Marc Weber <marco-oweber@gmx.de>",
+			AuthorTime: time.Unix(1263859200, 0).In(time.FixedZone("+0000", 0)),
+			Committer:  "Able Scraper <scraper@vim-scripts.org>",
+			CommitTime: time.Unix(1289713595, 0).In(time.FixedZone("-800", -8*60*60)),
+			Message:    "Version 0.3.1: fixes + QuickFix shortcut\n",
 		},
-		expectedMarshal: "tree e06bd601885e16ad3d72c2a8c9b411889b2e478e\n" +
-			"author Brian Kernighan <bwk> 80352345 -0500\n" +
-			"committer Brian Kernighan <bwk> 80352345 -0500\n" +
-			"golang-hg f6182e5abf5eb0c762dddbb18f8854b7e350eaeb\n" +
-			"\n" +
-			"hello, world\n" +
-			"\n" +
-			"R=ken\n" +
-			"DELTA=7  (7 added, 0 deleted, 0 changed)\n",
 	},
 }
 
@@ -206,10 +190,7 @@ func TestCommitMarshalText(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.expectedMarshal == "" {
-				test.expectedMarshal = test.data
-			}
-			if diff := cmp.Diff(test.expectedMarshal, string(got)); diff != "" {
+			if diff := cmp.Diff(test.data, string(got)); diff != "" {
 				t.Errorf("text (-want +got):\n%s", diff)
 			}
 		})
