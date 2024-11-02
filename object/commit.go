@@ -204,11 +204,21 @@ func writeUser(w io.Writer, name string, u User, t time.Time) error {
 	if !isSafeForHeader(string(u)) {
 		return fmt.Errorf("%s: %q contains unsafe characters", name, u)
 	}
-	_, err := fmt.Fprintf(w, "%s %s %d %s\n", name, u, t.Unix(), t.Format("-0700"))
+	_, err := fmt.Fprintf(w, "%s %s %d %s\n", name, u, t.Unix(), tzOffset(t))
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+func tzOffset(t time.Time) string {
+	name, offset := t.Zone()
+	// If the zone name is usable as a timezone offset, use it verbatim.
+	// This is critical for round-tripping commits with non-standard timezones.
+	if got, err := parseTZOffset([]byte(name)); err == nil && offset == got {
+		return name
+	}
+	return t.Format("-0700")
 }
 
 // SHA1 computes the SHA-1 hash of the commit object. This is commonly known as
@@ -283,10 +293,12 @@ func consumeUser(src []byte) (_ User, _ time.Time, tail []byte, _ error) {
 	if err != nil {
 		return "", time.Time{}, src, fmt.Errorf("parse timestamp: %w", err)
 	}
-	tz, err := parseTZOffset(line[tzOffsetStart:])
+	tzPart := line[tzOffsetStart:]
+	tzOffset, err := parseTZOffset(tzPart)
 	if err != nil {
 		return "", time.Time{}, src, err
 	}
+	tz := time.FixedZone(string(tzPart), tzOffset)
 	return User(line[:userEnd]), time.Unix(timestamp, 0).In(tz), tail, nil
 }
 
@@ -311,9 +323,9 @@ func consumeSignature(src []byte) (sig, tail []byte, _ error) {
 	return sig, tail, nil
 }
 
-func parseTZOffset(src []byte) (*time.Location, error) {
-	if len(src) != 5 && len(src) != 4 {
-		return nil, fmt.Errorf("parse UTC offset %q: wrong length", src)
+func parseTZOffset(src []byte) (int, error) {
+	if len(src) < 2 || len(src) > 5 {
+		return 0, fmt.Errorf("parse UTC offset %q: wrong length", src)
 	}
 	var sign int
 	switch src[0] {
@@ -322,16 +334,25 @@ func parseTZOffset(src []byte) (*time.Location, error) {
 	case '+':
 		sign = 1
 	default:
-		return nil, fmt.Errorf("parse UTC offset %q: must start with plus or minus sign", src)
+		return 0, fmt.Errorf("parse UTC offset %q: must start with plus or minus sign", src)
 	}
-	hhmm, err := strconv.Atoi(string(src[1:]))
-	if err != nil {
-		return nil, fmt.Errorf("parse UTC offset %q: %w", src, err)
+	digits := src[1:]
+	for _, b := range digits {
+		if b < '0' || b > '9' {
+			return 0, fmt.Errorf("parse UTC offset %q: must only have digits after sign", src)
+		}
 	}
-	hours := hhmm / 100
-	minutes := hhmm % 100
-	offset := (hours*60*60 + minutes*60) * sign
-	return time.FixedZone(string(src), offset), nil
+	hours := tzDigit(digits, -4)*10 + tzDigit(digits, -3)
+	minutes := tzDigit(digits, -2)*10 + tzDigit(digits, -1)
+	return (hours*60*60 + minutes*60) * sign, nil
+}
+
+func tzDigit(digits []byte, i int) int {
+	i = len(digits) + i
+	if i < 0 {
+		return 0
+	}
+	return int(digits[i] - '0')
 }
 
 var gpgSignaturePrefix = []byte("gpgsig")
