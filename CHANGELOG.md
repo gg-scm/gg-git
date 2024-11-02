@@ -12,14 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `io/fs` package is used for `FileMode` and `FileInfo` instead of `os`.
   This should be a compatible change, since the `os` types are aliases.
 - `*object.Commit.MarshalBinary` will use `*time.Location` names if they are in the proper format.
-  ([#32](https://github.com/gg-scm/gg-git/pull/32))
+  ([#34](https://github.com/gg-scm/gg-git/pull/34))
 
 ### Fixed
 
 - Using `packfile/client` to read from an empty repository on old versions (~2.17) of Git
   no longer returns an error.
 - `*object.Commit.UnmarshalBinary` accepts timezones with less than 4 digits.
-  ([#32](https://github.com/gg-scm/gg-git/pull/32))
+  ([#34](https://github.com/gg-scm/gg-git/pull/34))
 
 ## [0.11.0][] - 2023-08-01
 
