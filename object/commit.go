@@ -39,13 +39,15 @@ type Commit struct {
 	// Author identifies the person who wrote the code.
 	Author User
 	// AuthorTime is the time the code was written.
-	// The Location is significant.
+	// The Location is significant,
+	// and its name may be used for serialization if it meets the correct format.
 	AuthorTime time.Time
 
 	// Committer identifies the person who committed the code to the repository.
 	Committer User
 	// CommitTime is the time the code was committed to the repository.
-	// The Location is significant.
+	// The Location is significant,
+	// and its name may be used for serialization if it meets the correct format.
 	CommitTime time.Time
 
 	// Extra stores any lines in the commit object
@@ -62,16 +64,16 @@ type Commit struct {
 	Message string
 }
 
-// ParseCommit deserializes a commit in the Git object format. It is the same as
-// calling UnmarshalText on a new commit.
+// ParseCommit deserializes a commit in the Git object format.
+// It is the same as calling [*Commit.UnmarshalBinary] on a new commit.
 func ParseCommit(data []byte) (*Commit, error) {
 	c := new(Commit)
 	err := c.UnmarshalText(data)
 	return c, err
 }
 
-// UnmarshalText deserializes a commit from the Git object format. It is the
-// same as calling UnmarshalBinary.
+// UnmarshalText deserializes a commit from the Git object format.
+// It is the same as calling [*Commit.UnmarshalBinary].
 func (c *Commit) UnmarshalText(data []byte) error {
 	return c.UnmarshalBinary(data)
 }
@@ -164,8 +166,8 @@ func (c *Commit) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// MarshalText serializes a commit into the Git object format. It is the same as
-// calling MarshalBinary.
+// MarshalText serializes a commit into the Git object format.
+// It is the same as calling [*Commit.MarshalBinary].
 func (c *Commit) MarshalText() ([]byte, error) {
 	return c.MarshalBinary()
 }
