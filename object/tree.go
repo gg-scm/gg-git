@@ -107,14 +107,11 @@ func (tree Tree) SHA1() githash.SHA1 {
 
 // Search returns the entry with the given name in the tree or nil if not found.
 // It may return incorrect results if the tree is not sorted.
-func (tree Tree) Search(name string, mode Mode) *TreeEntry {
-	if mode == ModeDir {
-		name += "/"
-	}
+func (tree Tree) Search(name string) *TreeEntry {
 	i := sort.Search(len(tree), func(i int) bool {
-		return tree.pathOrderName(i) >= name
+		return tree[i].Name >= name
 	})
-	if i >= len(tree) || tree.pathOrderName(i) != name {
+	if i >= len(tree) || tree[i].Name != name {
 		return nil
 	}
 	return tree[i]
@@ -125,19 +122,9 @@ func (tree Tree) Len() int {
 	return len(tree)
 }
 
-func (tree Tree) pathOrderName(i int) string {
-	if tree[i].Mode == ModeDir {
-		return tree[i].Name + "/"
-	}
-	return tree[i].Name
-}
-
 // Less reports whether the i'th entry name is less than the j'th entry name.
-// See git src comment regarding adding '/' to a dir object:
-//
-//	https://github.com/git/git/blob/15030f9556f545b167b1879b877a5d780252dc16/fsck.c#L529-L536
 func (tree Tree) Less(i, j int) bool {
-	return tree.pathOrderName(i) < tree.pathOrderName(j)
+	return tree[i].Name < tree[j].Name
 }
 
 // Swap swaps the i'th entry with the j'th entry.
