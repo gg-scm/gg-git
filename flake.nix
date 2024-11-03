@@ -63,6 +63,7 @@
             args = {
               stdenv = pkgs.stdenv // { inherit (pkgs) lib; };
               python = pkgs.python3;
+              pkgconfig = pkgs.pkg-config;
             };
           }).overrideAttrs (new: old: {
             name = "git-2.20.1";
@@ -74,6 +75,7 @@
           packagePath = "${inputs.nixpkgs-git_2_25_1}/pkgs/applications/version-management/git-and-tools/git";
           args = {
             stdenv = pkgs.stdenv // { inherit (pkgs) lib; };
+            pkgconfig = pkgs.pkg-config;
           };
         };
 
@@ -82,6 +84,7 @@
             packagePath = "${inputs.nixpkgs-git_2_27_0}/pkgs/applications/version-management/git-and-tools/git";
             args = {
               stdenv = pkgs.stdenv // { inherit (pkgs) lib; };
+              pkgconfig = pkgs.pkg-config;
             };
           }).overrideAttrs (new: old: {
             outputs = [ "out" ];
@@ -90,11 +93,17 @@
         packages.git_2_45_2 = (self.lib.buildGit {
           inherit pkgs;
           packagePath = "${inputs.nixpkgs-git_2_45_2}/pkgs/applications/version-management/git";
+          args = {
+            inherit (pkgs.darwin.apple_sdk.frameworks) CoreServices Security;
+          };
         });
 
         packages.git_2_46_1 = (self.lib.buildGit {
           inherit pkgs;
           packagePath = "${inputs.nixpkgs-git_2_46_1}/pkgs/applications/version-management/git";
+          args = {
+            inherit (pkgs.darwin.apple_sdk.frameworks) CoreServices Security;
+          };
         });
 
         devShells.default = pkgs.mkShell {
@@ -108,8 +117,6 @@
       lib.buildGit = { pkgs, packagePath, args ? {} }:
         let
           defaultArgs = {
-            inherit (pkgs.darwin.apple_sdk.frameworks) CoreServices Security;
-
             guiSupport = false;
             sendEmailSupport = false;
             svnSupport = false;
