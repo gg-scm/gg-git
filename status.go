@@ -78,19 +78,8 @@ func (g *Git) Status(ctx context.Context, opts StatusOptions) ([]StatusEntry, er
 // not the new added file. See https://github.com/gg-scm/gg/issues/60
 // for a full explanation.
 func affectedByStatusRenameBug(version string) bool {
-	prefixes := []string{
-		"git version 2.11",
-		"git version 2.12",
-		"git version 2.13",
-		"git version 2.14",
-		"git version 2.15",
-	}
-	for _, p := range prefixes {
-		if strings.HasPrefix(version, p) && (len(version) == len(p) || version[len(p)] == '.') {
-			return true
-		}
-	}
-	return false
+	major, minor, ok := parseVersion(version)
+	return ok && major == 2 && 11 <= minor && minor <= 15
 }
 
 // A StatusEntry describes the state of a single file in the working copy.

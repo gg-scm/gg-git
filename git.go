@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -124,6 +125,39 @@ func (g *Git) getVersion(ctx context.Context) (string, error) {
 	g.version = v
 	g.versionMu.Unlock()
 	return v, nil
+}
+
+// parseVersion parses a Git version string.
+// Please use this as an absolute last resort:
+// the user may have a custom version of Git
+// or the format may change over time.
+// When working around buggy behavior,
+// the best practice is to write your code in the non-buggy way,
+// then have an explicit list of versions
+// that use the workaround.
+func parseVersion(version string) (major, minor int, ok bool) {
+	const prefix = "git version "
+	if !strings.HasPrefix(version, prefix) {
+		return 0, 0, false
+	}
+	version = version[len(prefix):]
+	// Only consider the first line of version output.
+	version, _, _ = strings.Cut(version, "\n")
+
+	majorString, rest, ok := strings.Cut(version, ".")
+	if !ok {
+		return 0, 0, false
+	}
+	majorUint, err := strconv.ParseUint(majorString, 10, 31)
+	if err != nil {
+		return 0, 0, false
+	}
+	minorString, _, _ := strings.Cut(rest, ".")
+	minorUint, err := strconv.ParseUint(minorString, 10, 31)
+	if err != nil {
+		return int(majorUint), 0, false
+	}
+	return int(majorUint), int(minorUint), true
 }
 
 // Exe returns the absolute path to the Git executable.

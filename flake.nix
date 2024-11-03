@@ -19,6 +19,12 @@
       url = "nixpkgs/98c44f565746165a556953cda769d23d732466f4";
       flake = false;
     };
+    nixpkgs-git_2_45_2 = {
+      url = "nixpkgs/53054089b25f3a55c8ca7af466223b94e80941b6";
+    };
+    nixpkgs-git_2_46_1 = {
+      url = "nixpkgs/892b7e93c849a214efb4a689ed1aa310b0bfa95e";
+    };
 
     git_2_20_1 = {
       url = "https://www.kernel.org/pub/software/scm/git/git-2.20.1.tar.xz";
@@ -38,7 +44,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
       in {
-        packages.go = pkgs.go_1_19;
+        packages.go = pkgs.go_1_23;
 
         packages.git = pkgs.git;
 
@@ -81,6 +87,16 @@
             outputs = [ "out" ];
           });
 
+        packages.git_2_45_2 = (self.lib.buildGit {
+          inherit pkgs;
+          packagePath = "${inputs.nixpkgs-git_2_45_2}/pkgs/applications/version-management/git";
+        });
+
+        packages.git_2_46_1 = (self.lib.buildGit {
+          inherit pkgs;
+          packagePath = "${inputs.nixpkgs-git_2_46_1}/pkgs/applications/version-management/git";
+        });
+
         devShells.default = pkgs.mkShell {
           packages = [
             self.packages.${system}.go
@@ -92,6 +108,8 @@
       lib.buildGit = { pkgs, packagePath, args ? {} }:
         let
           defaultArgs = {
+            inherit (pkgs.darwin.apple_sdk.frameworks) CoreServices Security;
+
             guiSupport = false;
             sendEmailSupport = false;
             svnSupport = false;

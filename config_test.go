@@ -234,6 +234,12 @@ func TestListRemotes(t *testing.T) {
 				"[remote \"myfork\"]\n" +
 				"url = https://example.com/foo-fork.git\n",
 		},
+		{
+			name: "ClearPushURL",
+			config: "[remote \"origin\"]\n" +
+				"url = https://example.com/foo.git\n" +
+				"pushurl =\n",
+		},
 	}
 	gitPath, err := findGit()
 	if err != nil {

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#34](https://github.com/gg-scm/gg-git/pull/34))
 - `object.Tree` now orders directories correctly.
   (Thanks to [@yangchi](https://github.com/yangchi) for discovering this issue.)
+- `*Config.ListRemotes` matches behavior when running with Git 2.46+.
 
 ## [0.11.0][] - 2023-08-01
 

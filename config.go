@@ -24,11 +24,14 @@ import (
 
 // Config is a collection of configuration settings.
 type Config struct {
-	data []byte
+	data       []byte
+	gitVersion string
 }
 
 // ReadConfig reads all the configuration settings from Git.
 func (g *Git) ReadConfig(ctx context.Context) (*Config, error) {
+	version, _ := g.getVersion(ctx)
+
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 	err := g.runner.RunGit(ctx, &Invocation{
@@ -44,6 +47,7 @@ func (g *Git) ReadConfig(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read git config: %w", err)
 	}
+	cfg.gitVersion = version
 	return cfg, nil
 }
 
@@ -157,6 +161,16 @@ func (cfg *Config) ListRemotes() map[string]*Remote {
 	fetchURLsSet := make(map[string]bool)
 	pushURLsSet := make(map[string]bool)
 	remotePrefix := []byte("remote.")
+
+	gitMajor, gitMinor, knownVersion := parseVersion(cfg.gitVersion)
+
+	// Prior to Git 2.46 (specifically commit b68118d2e85eef7aa993ef8e944e53b5be665160 AFAICT),
+	// Git would use the first found "url" and "pushurl" settings
+	// rather than the last.
+	// Furthermore, Git would leave the fetch URL blank if the first setting was empty.
+	// Later versions use the remote's name as a fetch URL.
+	improvedHandling := !knownVersion || gitMajor > 2 || (gitMajor == 2 && gitMinor >= 46)
+
 	for off := 0; off < len(cfg.data); {
 		k, v, end := splitConfigEntry(cfg.data[off:])
 		if end == -1 {
@@ -182,16 +196,14 @@ func (cfg *Config) ListRemotes() map[string]*Remote {
 		}
 
 		// Update appropriate setting.
-		// Oddly, Git seems to use the first found setting instead of
-		// the last. This is verified by the test.
 		switch string(k[i+1:]) {
 		case "url":
-			if !fetchURLsSet[name] {
+			if improvedHandling || !fetchURLsSet[name] {
 				remote.FetchURL = string(v)
 				fetchURLsSet[name] = true
 			}
 		case "pushurl":
-			if !pushURLsSet[name] {
+			if improvedHandling || !pushURLsSet[name] {
 				remote.PushURL = string(v)
 				pushURLsSet[name] = true
 			}
@@ -200,6 +212,9 @@ func (cfg *Config) ListRemotes() map[string]*Remote {
 		}
 	}
 	for _, remote := range remotes {
+		if improvedHandling {
+			remote.FetchURL = remote.Name
+		}
 		if !pushURLsSet[remote.Name] {
 			remote.PushURL = remote.FetchURL
 		}
