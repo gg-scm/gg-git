@@ -137,6 +137,32 @@ var treeTests = []struct {
 			},
 		},
 	},
+	{
+		name: "PathOrder",
+		id:   hashLiteral("0f6c5aae456e2d635fc4f6578db5d0f4a63064e2"),
+		parsed: Tree{
+			{
+				Name:     "a.c",
+				Mode:     0100644,
+				ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+			},
+			{
+				Name:     "a",
+				Mode:     040000,
+				ObjectID: hashLiteral("8a3651e1dbef13e4531bbe2af25c22964051cb35"),
+			},
+			{
+				Name:     "aa",
+				Mode:     0100644,
+				ObjectID: hashLiteral("e61ef7b965e17c62ca23b6ff5f0aaf09586e10e9"),
+			},
+			{
+				Name:     "b",
+				Mode:     0100644,
+				ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+			},
+		},
+	},
 }
 
 func TestParseTree(t *testing.T) {
@@ -183,6 +209,257 @@ func TestTreeSHA1(t *testing.T) {
 				t.Errorf("sha1() = %x; want %x", got, test.id)
 			}
 		})
+	}
+}
+
+func TestTreeSearch(t *testing.T) {
+	for _, test := range treeTests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, want := range test.parsed {
+				if got := test.parsed.Search(want.Name); got != want {
+					t.Errorf("tree.Search(%q) = %v; want %v", want.Name, got, want)
+				}
+			}
+
+			const nonexistentName = "nonexistent"
+			if got := test.parsed.Search(nonexistentName); got != nil {
+				t.Errorf("tree.Search(%q) = %v; want <nil>", nonexistentName, got)
+			}
+		})
+	}
+}
+
+func TestTreeSort(t *testing.T) {
+	tests := []struct {
+		unsorted Tree
+		sorted   Tree
+		err      bool
+	}{
+		{unsorted: Tree{}, sorted: Tree{}},
+		{
+			unsorted: Tree{
+				{
+					Name:     "settings.json",
+					Mode:     0100644,
+					ObjectID: hashLiteral("19571d8eb68230d997eb0254bdc50ab0c1085598"),
+				},
+			},
+			sorted: Tree{
+				{
+					Name:     "settings.json",
+					Mode:     0100644,
+					ObjectID: hashLiteral("19571d8eb68230d997eb0254bdc50ab0c1085598"),
+				},
+			},
+		},
+		{
+			unsorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+			},
+			sorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+			},
+		},
+		{
+			unsorted: Tree{
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+			},
+			sorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+			},
+		},
+		{
+			unsorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+			},
+			err: true,
+		},
+		{
+			unsorted: Tree{
+				{
+					Name:     "a",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "a",
+					Mode:     040000,
+					ObjectID: hashLiteral("8a3651e1dbef13e4531bbe2af25c22964051cb35"),
+				},
+				{
+					Name:     "aa",
+					Mode:     0100644,
+					ObjectID: hashLiteral("e61ef7b965e17c62ca23b6ff5f0aaf09586e10e9"),
+				},
+			},
+			err: true,
+		},
+		{
+			unsorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "a",
+					Mode:     040000,
+					ObjectID: hashLiteral("8a3651e1dbef13e4531bbe2af25c22964051cb35"),
+				},
+				{
+					Name:     "aa",
+					Mode:     0100644,
+					ObjectID: hashLiteral("e61ef7b965e17c62ca23b6ff5f0aaf09586e10e9"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+			},
+			sorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "a",
+					Mode:     040000,
+					ObjectID: hashLiteral("8a3651e1dbef13e4531bbe2af25c22964051cb35"),
+				},
+				{
+					Name:     "aa",
+					Mode:     0100644,
+					ObjectID: hashLiteral("e61ef7b965e17c62ca23b6ff5f0aaf09586e10e9"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+			},
+		},
+		{
+			unsorted: Tree{
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+				{
+					Name:     "a",
+					Mode:     040000,
+					ObjectID: hashLiteral("8a3651e1dbef13e4531bbe2af25c22964051cb35"),
+				},
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "aa",
+					Mode:     0100644,
+					ObjectID: hashLiteral("e61ef7b965e17c62ca23b6ff5f0aaf09586e10e9"),
+				},
+			},
+			sorted: Tree{
+				{
+					Name:     "a.c",
+					Mode:     0100644,
+					ObjectID: hashLiteral("ee7d88c52e4e6e34ed41737c78a536da407f0aa1"),
+				},
+				{
+					Name:     "a",
+					Mode:     040000,
+					ObjectID: hashLiteral("8a3651e1dbef13e4531bbe2af25c22964051cb35"),
+				},
+				{
+					Name:     "aa",
+					Mode:     0100644,
+					ObjectID: hashLiteral("e61ef7b965e17c62ca23b6ff5f0aaf09586e10e9"),
+				},
+				{
+					Name:     "b",
+					Mode:     0100644,
+					ObjectID: hashLiteral("82ab20cc2126a31a7507ca63c8e3402e118f82fa"),
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		description := test.unsorted.String()
+		err := test.unsorted.Sort()
+		if err != nil {
+			t.Logf("tree:\n%s\nSort(): %v (expected=%t)", description, err, test.err)
+			if !test.err {
+				t.Fail()
+			}
+			continue
+		}
+		if test.err {
+			t.Errorf("tree:\n%s\nSort() = <nil>; want error", description)
+			continue
+		}
+		if diff := cmp.Diff([]*TreeEntry(test.sorted), []*TreeEntry(test.unsorted)); diff != "" {
+			t.Errorf("tree:\n%s\nafter Sort() (-want +got):\n%s", description, diff)
+		}
 	}
 }
 

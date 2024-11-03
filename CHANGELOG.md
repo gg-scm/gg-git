@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer returns an error.
 - `*object.Commit.UnmarshalBinary` accepts timezones with less than 4 digits.
   ([#34](https://github.com/gg-scm/gg-git/pull/34))
+- `object.Tree` now orders directories correctly.
+  (Thanks to [@yangchi](https://github.com/yangchi) for discovering this issue.)
 
 ## [0.11.0][] - 2023-08-01
 

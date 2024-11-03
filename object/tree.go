@@ -30,8 +30,11 @@ import (
 )
 
 // A Tree is a Git tree object: a flat list of files in a directory.
-// The entries must be sorted by name and contain no duplicates.
 // The zero value is an empty tree.
+//
+// Tree methods generally assume elements of a Tree are sorted
+// and contain no duplicates.
+// Use [*Tree.Sort] to sort a tree and check for duplicates.
 type Tree []*TreeEntry
 
 // ParseTree deserializes a tree in the Git object format. It is the same as
@@ -74,6 +77,9 @@ func (tree *Tree) UnmarshalBinary(src []byte) error {
 		if len(*tree) > 1 && !tree.Less(len(*tree)-2, len(*tree)-1) {
 			return fmt.Errorf("parse git tree: not sorted")
 		}
+		if tree.isLastDuplicated() {
+			return fmt.Errorf("parse git tree: found duplicate %q", ent.Name)
+		}
 	}
 	return nil
 }
@@ -108,42 +114,81 @@ func (tree Tree) SHA1() githash.SHA1 {
 // Search returns the entry with the given name in the tree or nil if not found.
 // It may return incorrect results if the tree is not sorted.
 func (tree Tree) Search(name string) *TreeEntry {
-	i := sort.Search(len(tree), func(i int) bool {
-		return tree[i].Name >= name
-	})
-	if i >= len(tree) || tree[i].Name != name {
+	// First search for name assuming that it is not a directory.
+	i, ok := tree.search(name, false)
+	if !ok && i+1 < len(tree) {
+		// Now search with the assumption it *is* a directory.
+		// "a" < "a/", so we can bound our follow-up search to the tail of the slice.
+		tree = tree[i+1:]
+		i, ok = tree.search(name, true)
+	}
+	if !ok {
 		return nil
 	}
 	return tree[i]
 }
 
+func (tree Tree) search(name string, isDir bool) (i int, ok bool) {
+	i = sort.Search(len(tree), func(i int) bool {
+		return !treeEntryLess(tree[i].Name, tree[i].Mode.IsDir(), name, isDir)
+	})
+	return i, i < len(tree) && tree[i].Name == name
+}
+
 // Len returns the number of entries in the tree.
+//
+// Len is a part of [sort.Interface].
 func (tree Tree) Len() int {
 	return len(tree)
 }
 
-// Less reports whether the i'th entry name is less than the j'th entry name.
+// Less reports whether the i'th entry is ordered before the j'th entry
+// in Git path ordering.
+// Git path ordering is lexicographical,
+// but directories are treated as if their name ends in a slash ("/").
+//
+// Less is a part of [sort.Interface].
 func (tree Tree) Less(i, j int) bool {
-	return tree[i].Name < tree[j].Name
+	return treeEntryLess(tree[i].Name, tree[i].Mode.IsDir(), tree[j].Name, tree[j].Mode.IsDir())
 }
 
 // Swap swaps the i'th entry with the j'th entry.
+//
+// Swap is a part of [sort.Interface].
 func (tree Tree) Swap(i, j int) {
 	tree[i], tree[j] = tree[j], tree[i]
 }
 
 // Sort sorts the tree, returning an error if there are any duplicates.
+// See [*Tree.Less] for details regarding the sort order.
 func (tree Tree) Sort() error {
 	sort.Sort(tree)
 	for i := range tree {
-		if i == 0 {
-			continue
-		}
-		if name := tree[i].Name; tree[i-1].Name == name {
-			return fmt.Errorf("sort git tree: found duplicate %q", name)
+		if tree[:i+1].isLastDuplicated() {
+			return fmt.Errorf("sort git tree: found duplicate %q", tree[i].Name)
 		}
 	}
 	return nil
+}
+
+// isLastDuplicated reports whether the tree has multiple entries
+// that have the same name as the last element in the sorted tree.
+func (tree Tree) isLastDuplicated() bool {
+	if len(tree) < 2 {
+		return false
+	}
+	entry := tree[len(tree)-1]
+	if tree[len(tree)-2].Name == entry.Name {
+		return true
+	}
+	// The only way a sorted tree can contain a duplicate
+	// that doesn't immediately precede the last entry
+	// is for it to be a directory ("a" < "a/").
+	if !entry.Mode.IsDir() {
+		return false
+	}
+	_, found := tree[:len(tree)-2].search(entry.Name, false)
+	return found
 }
 
 // A TreeEntry represents a single file in a Git tree object.
@@ -192,6 +237,49 @@ func (ent *TreeEntry) appendTo(dst []byte) ([]byte, error) {
 	dst = append(dst, 0)
 	dst = append(dst, ent.ObjectID[:]...)
 	return dst, nil
+}
+
+// treeEntryLess reports whether e1 is less than e2 in "path" order.
+// "Path" order is *mostly* lexicographical,
+// but Git pretends that directories have a slash on the end.
+//
+// Best doc for this is a comment in git-fsck:
+// https://github.com/git/git/blob/15030f9556f545b167b1879b877a5d780252dc16/fsck.c#L529-L536
+func treeEntryLess(name1 string, isDir1 bool, name2 string, isDir2 bool) bool {
+	// Check for ordering in shared string length.
+	commonLength := len(name1)
+	if len(name2) < commonLength {
+		commonLength = len(name2)
+	}
+	if s1, s2 := name1[:commonLength], name2[:commonLength]; s1 != s2 {
+		return s1 < s2
+	}
+
+	// See if we need to logically extend either name with a slash.
+	n1 := len(name1)
+	var c1 byte
+	if commonLength < n1 {
+		c1 = name1[commonLength]
+	} else if isDir1 {
+		c1 = '/'
+		n1++
+	}
+	n2 := len(name2)
+	var c2 byte
+	if commonLength < n2 {
+		c2 = name2[commonLength]
+	} else if isDir2 {
+		c2 = '/'
+		n2++
+	}
+
+	// If both extended past the initial common prefix,
+	// then compare based on the logical next character (if they differ).
+	// Otherwise, this is about string length.
+	if n1 > commonLength && n2 > commonLength && c1 != c2 {
+		return c1 < c2
+	}
+	return n1 < n2
 }
 
 // String formats the entry in an ASCII-clean format similar to the Git tree
