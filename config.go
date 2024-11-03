@@ -213,9 +213,13 @@ func (cfg *Config) ListRemotes() map[string]*Remote {
 	}
 	for _, remote := range remotes {
 		if improvedHandling {
-			remote.FetchURL = remote.Name
-		}
-		if !pushURLsSet[remote.Name] {
+			if remote.FetchURL == "" {
+				remote.FetchURL = remote.Name
+			}
+			if remote.PushURL == "" {
+				remote.PushURL = remote.FetchURL
+			}
+		} else if !pushURLsSet[remote.Name] {
 			remote.PushURL = remote.FetchURL
 		}
 	}
