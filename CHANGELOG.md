@@ -3,9 +3,15 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.11.0...main
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.12.0...main
 
-## [Unreleased][]
+## [0.12.0][] - 2024-11-02
+
+Version 0.12 is mostly a bugfix release,
+but the changes in behavior to fix compatibility
+seemed large enough to warrant bumping the minor version.
+
+[0.12.0]: https://github.com/gg-scm/gg-git/releases/tag/v0.12.0
 
 ### Changed
 
