@@ -188,7 +188,10 @@ type IterateRefsOptions struct {
 }
 
 func (opts IterateRefsOptions) filter(ref []byte, deref bool) bool {
-	if (Ref(ref) == Head && !opts.IncludeHead) || (deref && !opts.DereferenceTags) {
+	if Ref(ref) == Head && opts.IncludeHead {
+		return true
+	}
+	if deref && !opts.DereferenceTags {
 		return false
 	}
 	if opts.LimitToBranches || opts.LimitToTags {

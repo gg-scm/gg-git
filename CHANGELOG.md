@@ -3,7 +3,17 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.12.0...main
+[Unreleased]: https://github.com/gg-scm/gg-git/compare/v0.12.1...main
+
+## [0.12.1][] - 2026-10-21
+
+Version 0.12.1 fixes ref iteration with `HEAD`.
+
+[0.12.1]: https://github.com/gg-scm/gg-git/releases/tag/v0.12.1
+
+### Fixed
+
+- `IterateRefsOptions.IncludeHead` now works even when `LimitToBranches` and `LimitToTags` are set.
 
 ## [0.12.0][] - 2024-11-02
 
